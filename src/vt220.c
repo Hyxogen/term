@@ -364,6 +364,11 @@ static void term_exec_sgr(struct term *term)
 		case 1:
 			term->sgr_flags |= SGR_FLAG_BOLD;
 			break;
+		case 4:
+		case 24:
+			term->sgr_flags &= ~SGR_FLAG_UNDERLINED;
+			term->sgr_flags |= SGR_FLAG_UNDERLINED * (param == 4);
+			break;
 		case 7:
 		case 27:
 			term->inverse = param == 7;

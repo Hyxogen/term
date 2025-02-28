@@ -11,6 +11,7 @@
 #define TERM_DEFAULT_TABSTOP 8
 
 #define SGR_FLAG_BOLD 0x01
+#define SGR_FLAG_UNDERLINED 0x02
 
 struct term;
 struct termops;

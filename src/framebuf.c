@@ -77,8 +77,12 @@ static void fb_draw_char(struct term *term, unsigned col, unsigned row, u32 fg, 
 			u8 col = row[fx / 8];
 			u8 mask = 0x80 >> (fx % 8);
 
+			bool draw = col & mask;
+			if (y + 1 == height && (flags & SGR_FLAG_UNDERLINED))
+				draw = true;
+
 			fb_put(fb, x + xoff, y + yoff,
-			       (col & mask) ? fg : bg);
+			       draw ? fg : bg);
 		}
 	}
 }
