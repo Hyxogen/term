@@ -328,7 +328,6 @@ if (cp == 'h') {
 	unsigned short param = term_get_param(term, 0);
 	switch (param) {
 	case DECTCEM:
-		fprintf(stderr, "DECTCEM!\n");
 		term->draw_cursor = set;
 
 		if (set)
@@ -447,8 +446,6 @@ static void term_dump_csi(const struct term *term, u32 cp)
 void csi_dispatch(struct parser *ctx, uint32_t cp)
 {
 	struct term *term = ctx->priv;
-
-	term_dump_csi(term, cp);
 
 	if (term->param != 0)
 		term_commit_param(term);
@@ -574,15 +571,7 @@ void csi_dispatch(struct parser *ctx, uint32_t cp)
 		break;
 	default:
 		fprintf(stderr, "unsupported csi sequence: %c (0x%02x)\n", cp, cp);
-		fprintf(stderr, "buf: \"%s\"\n", term->buf);
-
-		if (term->nparams == 0) {
-			fprintf(stderr, "no params\n");
-		} else {
-			for (unsigned i = 0; i < term->nparams; i++)
-				fprintf(stderr, "%u ", term->params[i]);
-			fprintf(stderr, "\n");
-		}
+		term_dump_csi(term, cp);
 	}
 }
 
