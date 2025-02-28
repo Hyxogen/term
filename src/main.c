@@ -1,5 +1,11 @@
-#define WIDTH 640
-#define HEIGHT 216
+#define FONT_SIZE 2
+#define FONT_WIDTH 8
+#define FONT_HEIGHT 8
+
+#define COLS 137
+#define ROWS 35
+#define WIDTH (FONT_WIDTH*FONT_SIZE*COLS)
+#define HEIGHT (FONT_HEIGHT*FONT_SIZE*ROWS)
 
 #define SDL_MAIN_USE_CALLBACKS 1
 #include <SDL3/SDL.h>
@@ -19,7 +25,7 @@ static SDL_Window *window;
 static SDL_Renderer *renderer;
 static SDL_Surface *surface;
 static struct framebuf fb;
-static struct sterm term;
+static struct term term;
 
 int execvpe(const char *file, char *const argv[], char *const envp[]);
 
@@ -29,7 +35,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 
 	ssize_t nread = 0;
 	while ((nread = read(term.fd, buffer, sizeof(buffer))) > 0) {
-		sterm_write(&term, buffer, nread);
+		term_write(&term, buffer, nread);
 	}
 
 	if (nread < 0 && errno != EWOULDBLOCK) {
@@ -50,6 +56,8 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 static char uppercase(char ch)
 {
 	switch (ch) {
+	case '\\':
+		return '|';
 	case ';':
 		return ':';
 	case '1':
@@ -59,13 +67,43 @@ static char uppercase(char ch)
 	}
 }
 
+static SDL_AppResult app_term_write(const void *data, size_t n)
+{
+	ssize_t rc = write(term.fd, data, n);
+	if (rc < 0 && errno != EWOULDBLOCK) {
+		perror("write");
+		return SDL_APP_FAILURE;
+	}
+	if (rc == 0) {
+		printf("pty closed");
+		return SDL_APP_SUCCESS;
+	}
+	return SDL_APP_CONTINUE;
+}
+
 SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 {
 	switch (event->type) {
 	case SDL_EVENT_QUIT:
 		return SDL_APP_SUCCESS;
 	case SDL_EVENT_KEY_DOWN: {
-		int key = event->key.key;
+		unsigned key = event->key.key;
+
+		if (key & 0x40000000) {
+			switch (key) {
+			case SDLK_UP:
+				return app_term_write("\033[A", 3);
+			case SDLK_DOWN:
+				return app_term_write("\033[B", 3);
+			case SDLK_RIGHT:
+				return app_term_write("\033[C", 3);
+			case SDLK_LEFT:
+				return app_term_write("\033[D", 3);
+			default:
+				fprintf(stderr, "unknown special key 0x%x\n", key);
+				break;
+			}
+		}
 
 		if (key == SDLK_RETURN)
 			key = '\n';
@@ -77,17 +115,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 			ch = uppercase(key);
 		}
 
-		printf("got key '0x%02x'\n", key);
-
-		ssize_t rc = write(term.fd, &ch, 1);
-		if (rc < 0 && errno != EWOULDBLOCK) {
-			perror("write");
-			return SDL_APP_FAILURE;
-		}
-		if (rc == 0) {
-			printf("pty closed");
-			return SDL_APP_SUCCESS;
-		}
+		printf("got key '0x%02x'\n", ch);
+		return app_term_write(&ch, 1);
 
 		/*if (key == SDLK_RETURN)
 			sterm_write(&term, "\r\n", 2);
@@ -110,11 +139,11 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
                 char *const args[] = {
                     NULL,
                 };
-                char *const env[] = {
+                /*char *const env[] = {
 			"TERM=vt220",
-		};
+		};*/
 
-		execvpe(prog, args, env);
+		execvp(prog, args);
 		perror("execvpe");
 		return SDL_APP_FAILURE;
 	}
@@ -140,13 +169,14 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
 	fb.green_mask_shift = 8;
 	fb.blue_mask_size = 8;
 	fb.blue_mask_shift = 0;
+	fb.font_size = FONT_SIZE;
 
 	rc = font_read_from(&fb.font, psf2_default_font, psf2_default_font_len);
 	assert(!rc);
 
 	printf("pixel format: '%s'\n", SDL_GetPixelFormatName(surface->format));
 
-	sterm_init(&term, &fb_ops, &fb);
+	term_init(&term, &fb_ops, &fb);
 
 	rc = fcntl(term.fd, F_SETFL, O_NONBLOCK);
 	if (rc < 0) {

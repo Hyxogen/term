@@ -2,85 +2,201 @@
 #include <sterm/types.h>
 #include <sterm/ctrl.h>
 #include <stdio.h>
+#include <sterm/sterm.h>
+#include <assert.h>
+#include <string.h>
+#include <stdlib.h>
 
 #define eprintln(...) fprintf(stderr, __VA_ARGS__)
 
-struct encoder;
-
-struct encoder_ops {
-	i64 (*put)(struct encoder *, char ch);
-};
-
-struct encoder {
-	char buf[16];
-	unsigned char offset;
-	const struct encoder_ops *ops;
-};
-
-enum term_state {
-	STATE_GROUND,
-	STATE_ESCAPE,
-	STATE_ESCAPE_INTERMEDIATE,
-	STATE_CSI_ENTRY,
-	STATE_CSI_PARAM,
-	STATE_CSI_INTERMEDIATE,
-	STATE_CSI_IGNORE,
-	STATE_DCS_ENTRY,
-	STATE_DCS_INTERMEDIATE,
-	STATE_DCS_IGNORE,
-	STATE_DCS_PARAM,
-	STATE_DCS_PASTHROUGH,
-	STATE_OSC,
-	STATE_SOSPMAPC,
-};
-
-struct term {
-	unsigned rows;
-	unsigned cols;
-
-	unsigned row;
-	unsigned col;
-
-	struct encoder encoder;
-
-	enum term_state state;
-
-	u32 fg_color;
-	u32 bg_color;
-
-	char buf[64];
-	unsigned char buf_off;
-	bool overflowed;
-};
-
-static bool term_is_c0(u32 cp)
+void collect(struct parser *ctx, uint32_t cp)
 {
-	return cp <= C0_US;
-}
+	struct term *term = ctx->priv;
 
-static bool term_is_c1(u32 cp)
-{
-	return cp >= C1_PAD && cp <= C1_APC;
-}
-
-static bool term_is_ctrl(u32 cp)
-{
-	return term_is_c0(cp) || term_is_c1(cp);
-}
-
-static void term_exec_c0(struct term *term, char ctrl)
-{
-	switch (ctrl) {
-	case C0_NUL:
-		break;
-	case C0_ESC:
-		term->state = STATE_ESCAPE;
-		break;
-	default:
-		eprintln("unsupported C0 control charachter: '%s' (0x%02x)\n",
-			 ctrl_get_long_name(ctrl), (unsigned)ctrl);
-		break;
+	if (term->overflowed || term->buf_off >= sizeof(term->buf) - 1) {
+		term->overflowed = true;
+	} else {
+		term->buf[term->buf_off++] = (unsigned char) cp;
+		term->buf[term->buf_off] = '\0';
 	}
+}
+
+static void term_commit_param(struct term *term)
+{
+	if (term->nparams >= sizeof(term->params)/sizeof(term->params[0]))
+		return;
+
+	term->params[term->nparams++] = term->param;
+	term->param = 0;
+}
+
+void param(struct parser *ctx, uint32_t cp)
+{
+	struct term *term = ctx->priv;
+
+	if (cp == ';') {
+		term_commit_param(term);
+	} else {
+		assert(cp >= '0' && cp <= '9');
+
+		term->param = term->param * 10 + (cp - '0');
+	}
+}
+
+void osc_start(struct parser *ctx, uint32_t cp)
+{
+	(void)ctx;
+	(void)cp;
+	/* TODO */
+}
+
+void osc_put(struct parser *ctx, uint32_t cp)
+{
+	(void)ctx;
+	(void)cp;
+	/* TODO */
+}
+
+void osc_end(struct parser *ctx, uint32_t cp)
+{
+	(void)ctx;
+	(void)cp;
+	/* TODO */
+}
+
+void put(struct parser *ctx, uint32_t cp)
+{
+	(void)ctx;
+	(void)cp;
+	/* TODO */
+}
+
+void esc_dispatch(struct parser *ctx, uint32_t cp)
+{
+	(void)ctx;
+	(void)cp;
+	/* TODO */
+}
+
+void csi_dispatch(struct parser *ctx, uint32_t cp)
+{
+	(void)ctx;
+	(void)cp;
+	/* TODO */
+}
+
+void execute(struct parser *ctx, uint32_t cp)
+{
+	(void)ctx;
+	(void)cp;
+	/* TODO */
+}
+
+void hook(struct parser *ctx, uint32_t cp)
+{
+	(void)ctx;
+	(void)cp;
+	/* TODO */
+}
+
+void unhook(struct parser *ctx, uint32_t cp)
+{
+	(void)ctx;
+	(void)cp;
+	/* TODO */
+}
+
+void clear(struct parser *ctx, uint32_t cp)
+{
+	struct term *term = ctx->priv;
+	(void) cp;
+
+	term->overflowed = false;
+	term->buf_off = 0;
+}
+
+static struct termchar *term_get_at(struct term *term, unsigned cx, unsigned cy)
+{
+	assert(cy < term->rows && cx < term->cols);
+	return &term->chars[cy * term->cols + cx];
+}
+
+static void term_redraw(struct term *term, unsigned cx, unsigned cy)
+{
+	struct termchar *ch = term_get_at(term, cx, cy);
+	if (ch->cp == 0)
+		term->ops->clear_char(term, cx, cy, ch->bg);
+	else
+		term->ops->draw_char(term, cx, cy, ch->fg, ch->bg,
+				     ch->cp);
+}
+
+static void sterm_redraw_row(struct term *term, unsigned cy)
+{
+	for (unsigned cx = 0; cx < term->cols; cx++) {
+		term_redraw(term, cx, cy);
+	}
+}
+
+static void sterm_redraw(struct term *term)
+{
+	for (unsigned cy = 0; cy < term->rows; cy++) {
+		sterm_redraw_row(term, cy);
+	}
+}
+
+static void term_scroll(struct term *term, int dir)
+{
+	assert(dir != 0);
+
+	char *region_start;
+	char *paste_start;
+	size_t nlines;
+
+	if (dir < 0) {
+		/* scroll up */
+		region_start = (void*) &term->chars[term->cols * (-dir + term->scroll_top)];
+		paste_start = (void*) &term->chars[term->cols * term->scroll_top];
+
+		nlines = term->rows + dir;
+	} else {
+		/* scroll down */
+
+		region_start = (void*) &term->chars[term->cols * term->scroll_top];
+		paste_start = (void*) &term->chars[term->cols * (dir + term->scroll_top)];
+
+		nlines = term->rows - dir;
+	}
+
+	if (nlines > term->scroll_bot - term->scroll_top)
+		nlines = term->scroll_bot - term->scroll_top;
+
+	size_t nchars = nlines * term->cols;
+	char *end = (void*) &term->chars[term->cols * term->scroll_bot];
+
+	char *region_end = region_start + nchars * sizeof(struct termchar);
+	char *paste_end = paste_start + nchars * sizeof(struct termchar);
+
+	memmove(paste_start, region_start, region_end - region_start);
+
+	if (dir > 0)
+		memset(term->chars, 0, paste_start - (char*) term->chars);
+	if (dir < 0) {
+		assert(end >= paste_end);
+		memset(paste_end, 0, end - paste_end);
+	}
+
+	sterm_redraw(term);
+}
+
+static void term_put_char(struct term *term, unsigned cx, unsigned cy, u32 cp, u32 fg, u32 bg)
+{
+	struct termchar *ch = term_get_at(term, cx, cy);
+
+	ch->cp = cp;
+	ch->fg = fg;
+	ch->bg = bg;
+	term_redraw(term, cx, cy);
 }
 
 static void term_linefeed(struct term *term)
@@ -91,134 +207,9 @@ static void term_linefeed(struct term *term)
 	}
 }
 
-static void term_clear_buf(struct term *term)
-{
-	term->buf_off = 0;
-	term->overflowed = false;
-}
-
-static void term_exec_ctrl(struct term *term, unsigned char ctrl)
-{
-	switch (ctrl) {
-	case C0_NUL:
-		break;
-	case C0_ESC:
-		term->state = STATE_ESCAPE;
-		break;
-	case C0_SUB:
-		/* TODO print substitution char */
-		/* fallthrough */
-	case C1_ST:
-	case C0_CAN:
-		term->state = STATE_GROUND;
-		break;
-	case C1_CSI:
-		term->state = STATE_CSI_ENTRY;
-		break;
-	case C1_DCS:
-		term->state = STATE_DCS_ENTRY;
-		break;
-	case C1_OSC:
-		term->state = STATE_OSC;
-		break;
-	case C1_SOS:
-	case C1_PM:
-	case C1_APC:
-		term->state = STATE_SOSPMAPC;
-		break;
-	default:
-		eprintln("unsupported control charachter: '%s' (0x%02x)\n",
-			 ctrl_get_long_name(ctrl), (unsigned)ctrl);
-		term->state = STATE_GROUND;
-		break;
-
-	}
-}
-
-static void term_exec_escape(struct term *term, u32 cp)
-{
-
-}
-
-static void term_collect(struct term *term, char ch)
-{
-	if (term->overflowed || term->buf_off == sizeof(term->buf) - 1) {
-		term->overflowed = true;
-		return;
-	}
-
-	term->buf[term->buf_off++] = ch;
-	term->buf[term->buf_off] = '\0';
-}
-
-static void term_put_escaped(struct term *term, u32 cp)
-{
-	term_clear_buf(term);
-
-	if (term_is_c0(cp)) {
-		term_exec_ctrl(term, cp);
-		return;
-	}
-
-	switch (cp) {
-	case 0x00 ... 0x17:
-	case 0x19:
-	case 0x1c ... 0x1f:
-		term_exec_escape(term, cp);
-		break;
-	case 0x20 ... 0x2f:
-		term->state = STATE_ESCAPE_INTERMEDIATE;
-		term_collect(term, cp);
-		break;
-	case 0x50: /* DCS */
-		term->state = STATE_DCS_ENTRY;
-		return;
-	case 0x5b: /* CSI */
-		term->state = STATE_CSI_ENTRY;
-		return;
-	case 0x5d: /* OSC */
-		term->state = STATE_OSC;
-		return;
-	case 0x7f: /* ignore */
-		break;
-	default:
-		eprintln("unknown escape character 0%08x", cp);
-		break;
-	}
-
-	term->state = STATE_GROUND;
-}
-
-static void term_esc_dispatch(struct term *term, u32 cp)
-{
-	if (!term->overflowed) {
-		/* TODO execute escape sequence */
-	}
-	term->state = STATE_GROUND;
-}
-
-static void term_put_escaped_intermediate(struct term *term, u32 cp)
-{
-	if (term_is_c0(cp)) {
-		term_exec_ctrl(term, cp);
-		return;
-	}
-
-	switch (cp) {
-	case 0x20 ... 0x2f:
-		term_collect(term, cp);
-		break;
-	case 0x30 ... 0x7e:
-		term_esc_dispatch(term, cp);
-		break;
-	case 0x7f: /* ignore */
-		break;
-	}
-}
-
 static void term_print(struct term *term, u32 cp)
 {
-	term_set_char(term, term->col++, term->row, cp, term->fg_color, term->bg_color);
+	term_put_char(term, term->col++, term->row, cp, term->fg_color, term->bg_color);
 
 	if (term->col == term->cols) {
 		term->col = 0;
@@ -226,22 +217,124 @@ static void term_print(struct term *term, u32 cp)
 	}
 }
 
-static void term_put_ground(struct term *term, u32 cp)
+void print(struct parser *ctx, u32 cp)
 {
-	if (term_is_c0(cp)) {
-		term_exec_ctrl(term, cp);
-	} else {
-		term_print(term, cp);
+	term_print(ctx->priv, cp);
+}
+
+extern void parser_push(struct parser *ctx, uint32_t cp);
+extern void parser_init(struct parser *ctx, void *priv);
+
+static u32 term_get_color(struct term *term, enum termcolor color)
+{
+	assert(term->ops->encode_color || term->ops->encode_rgb);
+
+	if (term->ops->encode_color)
+		return term->ops->encode_color(term, color);
+
+	switch (color) {
+	case TERMCOLOR_BLACK:
+		return term->ops->encode_rgb(term, 0, 0, 0);
+	case TERMCOLOR_RED:
+		return term->ops->encode_rgb(term, 170, 0, 0);
+	case TERMCOLOR_GREEN:
+		return term->ops->encode_rgb(term, 0, 170, 0);
+	case TERMCOLOR_YELLOW:
+		return term->ops->encode_rgb(term, 170, 85, 0);
+	case TERMCOLOR_BLUE:
+		return term->ops->encode_rgb(term, 0, 0, 170);
+	case TERMCOLOR_MAGENTA:
+		return term->ops->encode_rgb(term, 170, 0, 170);
+	case TERMCOLOR_CYAN:
+		return term->ops->encode_rgb(term, 0, 170, 170);
+	case TERMCOLOR_WHITE:
+		return term->ops->encode_rgb(term, 170, 170, 170);
+	case TERMCOLOR_BRIGHT_BLACK:
+		return term->ops->encode_rgb(term, 85, 85, 85);
+	case TERMCOLOR_BRIGHT_RED:
+		return term->ops->encode_rgb(term, 255, 85, 85);
+	case TERMCOLOR_BRIGHT_GREEN:
+		return term->ops->encode_rgb(term, 85, 255, 85);
+	case TERMCOLOR_BRIGHT_YELLOW:
+		return term->ops->encode_rgb(term, 255, 255, 85);
+	case TERMCOLOR_BRIGHT_BLUE:
+		return term->ops->encode_rgb(term, 85, 85, 255);
+	default:
+	case TERMCOLOR_BRIGHT_MAGENTA:
+		return term->ops->encode_rgb(term, 255, 85, 255);
+	case TERMCOLOR_BRIGHT_CYAN:
+		return term->ops->encode_rgb(term, 85, 255, 255);
+	case TERMCOLOR_BRIGHT_WHITE:
+		return term->ops->encode_rgb(term, 255, 255, 255);
 	}
 }
 
-static void term_put(struct term *term, char ch)
+static void term_put(struct term *term, unsigned char ch)
 {
 	u64 res = term->encoder.ops->put(&term->encoder, ch);
 	if (res < 0) {
 		return;
 	}
-	
-	u32 cp = (u32) res;
 
+	parser_push(&term->parser, (u32) res);
+}
+
+void term_write(struct term *term, const void *src, size_t n)
+{
+	const unsigned char *c = src;
+	for (size_t i = 0; i < n; i++) {
+		term_put(term,c[i]);
+	}
+}
+
+static i64 ascii_encode(struct encoder *encoder, char ch)
+{
+	(void)encoder;
+	return ch;
+}
+
+static const struct encoder_ops ascii_ops = {
+	.put = ascii_encode,
+};
+
+int term_init(struct term *term, const struct termops *ops, void *ctx)
+{
+	term->row = 0;
+	term->col = 0;
+
+	term->priv = ctx;
+
+	term->buf_off = 0;
+	term->overflowed = false;
+
+	term->param = 0;
+	term->nparams = 0;
+
+	parser_init(&term->parser, term);
+
+	term->ops = ops;
+
+	term->ops->get_dimensions(term, &term->cols, &term->rows);
+
+	term->white = term_get_color(term, TERMCOLOR_WHITE);
+	term->black = term_get_color(term, TERMCOLOR_BLACK);
+	term->inverse = false;
+
+	term->fg_color = term->white;
+	term->bg_color = term->black;
+
+	/* TODO properly set encoder */
+	term->encoder.ops = &ascii_ops;
+
+	term->chars = calloc(term->cols * term->rows, sizeof(*term->chars));
+	if (!term->chars)
+		return -1;
+	return 0;
+}
+
+void term_free(struct term *term)
+{
+	if (term->ops->release)
+		term->ops->release(term->priv);
+	free(term->chars);
 }

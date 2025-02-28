@@ -1,20 +1,25 @@
 #!/usr/bin/python3
 
+import sys
+
 seen = set()
 states = []
 # rule layout, (STATE, [CONDITION], [HOOK], NEWSTATE)
 rules = []
 start = None
 
-header = "parser.h"
-source = "parser.c"
+infile = sys.argv[1]
+header = sys.argv[2]
+source = sys.argv[3]
 
 def maybe_add_state(state):
     if state not in seen:
         seen.add(state)
         states.append(state)
 
-with open(0) as file:
+with open(infile, 'r') as file:
+    current = None
+
     for line in file.readlines():
         line = line.strip()
 
@@ -25,15 +30,20 @@ with open(0) as file:
             split = line.split()
             start = split[1]
             continue
+        if line.startswith("STATE"):
+            split = line.split()
+            current = split[1]
+            maybe_add_state(current)
+            continue
+        if line.startswith("END"):
+            current = None
+            continue
+
+        assert current is not None
 
         split = line.split("->")
-        
-        parts = list(map(str.strip, split[0].split(",")))
 
-        from_state = parts[0]
-        maybe_add_state(from_state)
-
-        conditions = parts[1:]
+        conditions = list(map(str.strip, split[0].split(",")))
 
         parts = list(map(str.strip, split[1].split(",")))
 
@@ -42,7 +52,7 @@ with open(0) as file:
 
         hook = parts[0]
 
-        rules.append((from_state, conditions, hook, to_state))
+        rules.append((current, conditions, hook, to_state))
 
 with open(header, 'w') as hfile, open(source, 'w') as sfile:
     def printh(string):
@@ -98,7 +108,7 @@ with open(header, 'w') as hfile, open(source, 'w') as sfile:
             prints("\tif (1) {")
         prints("\t\tswitch (cp) {")
         for condition in conditions:
-            if condition == "ANY":
+            if condition == "DEFAULT":
                 prints("\t\tdefault:")
                 pass
             else:

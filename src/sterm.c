@@ -13,6 +13,180 @@
 #define BACKSPACE 0x08
 #define TERM_CSI "\033"
 
+/* https://vt100.net */
+/* https://wiki.archlinux.org/title/KMSCON */
+
+static bool sterm_is_terminator(int ch)
+{
+	return isalpha(ch) || ch == '~' || ch == '@';
+}
+
+static struct termchar *sterm_get_at(const struct sterm *term, unsigned col, unsigned row)
+{
+	return (struct termchar*) &term->chars[row * term->width + col];
+}
+
+static void sterm_clear_cursor(struct sterm *term)
+{
+	struct termchar *ch = sterm_get_at(term, term->col, term->row);
+	term->ops->draw_char(term, term->col, term->row, ch->fg, ch->bg, ch->codepoint);
+}
+
+static void sterm_draw_cursor(struct sterm *term)
+{
+	if (!term->draw_cursor)
+		return;
+
+	struct termchar *ch = sterm_get_at(term, term->col, term->row);
+	term->ops->draw_char(term, term->col, term->row, term->black, term->white, ch->codepoint ? ch->codepoint : ' ');
+}
+
+static void sterm_redraw_row(struct sterm *term, unsigned row)
+{
+	for (unsigned col = 0; col < term->width; col++) {
+		struct termchar *ch = sterm_get_at(term, col, row);
+		if (ch->codepoint == 0)
+			term->ops->clear_char(term, col, row, ch->bg);
+		else
+			term->ops->draw_char(term, col, row, ch->fg, ch->bg, ch->codepoint);
+	}
+}
+
+static void sterm_redraw(struct sterm *term)
+{
+	for (unsigned row = 0; row < term->height; row++) {
+		sterm_redraw_row(term, row);
+	}
+}
+
+
+static void sterm_put_at(struct sterm *term, unsigned col, unsigned row, u32 cp, u32 fg, u32 bg)
+{
+	assert(col < term->width && row < term->height);
+	struct termchar *ch = sterm_get_at(term, col, row);
+
+	ch->codepoint = cp;
+	ch->fg = fg;
+	ch->bg = bg;
+
+	term->ops->draw_char(term, col, row, fg, bg, cp);
+}
+
+static void sterm_scroll(struct sterm *term, int dir)
+{
+	assert(dir != 0);
+
+	char *region_start;
+	char *paste_start;
+	size_t nlines;
+
+	if (dir < 0) {
+		/* scroll up */
+		region_start = (void*) &term->chars[term->width * (-dir + term->scroll_top)];
+		paste_start = (void*) &term->chars[term->width * term->scroll_top];
+
+		nlines = term->height + dir;
+	} else {
+		/* scroll down */
+
+		region_start = (void*) &term->chars[term->width * term->scroll_top];
+		paste_start = (void*) &term->chars[term->width * (dir + term->scroll_top)];
+
+		nlines = term->height - dir;
+	}
+
+	if (nlines > term->scroll_bot - term->scroll_top)
+		nlines = term->scroll_bot - term->scroll_top;
+
+	size_t nchars = nlines * term->width;
+	char *end = (void*) &term->chars[term->width * term->scroll_bot];
+
+	char *region_end = region_start + nchars * sizeof(struct termchar);
+	char *paste_end = paste_start + nchars * sizeof(struct termchar);
+
+	memmove(paste_start, region_start, region_end - region_start);
+
+	if (dir > 0)
+		memset(term->chars, 0, paste_start - (char*) term->chars);
+	if (dir < 0) {
+		assert(end >= paste_end);
+		memset(paste_end, 0, end - paste_end);
+	}
+
+	sterm_redraw(term);
+}
+
+static void sterm_clear_char(struct sterm *term, unsigned col, unsigned row, u32 color)
+{
+	struct termchar *ch = sterm_get_at(term, col, row);
+
+	ch->codepoint = 0;
+	ch->fg = color;
+	ch->bg = color;
+
+	term->ops->clear_char(term, col, row, color);
+}
+
+static void sterm_delete_chars(struct sterm *term, unsigned col, unsigned row, unsigned nchars)
+{
+	unsigned rem = term->width - col;
+	if (nchars > rem)
+		nchars = rem;
+
+	struct termchar *start = sterm_get_at(term, col, row);
+	struct termchar *end = sterm_get_at(term, col + nchars, row);
+
+	memset(start, 0, (end - start) * sizeof(*start));
+
+	if (nchars < rem) {
+		memmove(start, start + nchars, (rem - nchars) * sizeof(*start));
+		memset(start + nchars, 0, (term->width - col - nchars));
+	}
+
+	sterm_redraw_row(term, row);
+}
+
+static void sterm_reset(struct sterm *term)
+{
+	term->row = 0;
+	term->col = 0;
+
+	term->escape_off = 0;
+	term->dcs = false;
+	term->in_osc = false;
+
+	term->draw_cursor = true;
+
+	term->ops->get_dimensions(term, &term->width, &term->height);
+	printf("width: %u height: %u\n", term->width, term->height);
+
+	term->scroll_top = 0;
+	term->scroll_bot = term->height;
+
+	/* TODO init encoder */
+
+	term->inverse = false;
+
+	term->fg_color = term->white;
+	term->bg_color = term->black;
+	memset(term->chars, 0, term->width * term->height * sizeof(*term->chars));
+	sterm_redraw(term);
+}
+
+static u32 sterm_get_fg(const struct sterm *term)
+{
+	if (term->inverse)
+		return term->bg_color;
+	return term->fg_color;
+}
+
+static u32 sterm_get_bg(const struct sterm *term)
+{
+	if (term->inverse)
+		return term->fg_color;
+	return term->bg_color;
+}
+
 static bool sterm_is_escape_ch(u32 cp)
 {
 	return cp < 127;
@@ -24,63 +198,6 @@ static void sterm_clear_escape(struct sterm *term)
 	term->escape_off = 0;
 }
 
-static int get_dec_mode_bit(int Ps)
-{
-	switch (Ps) {
-	case 1: /* Application Cursor Keys (DECCKM) */
-	case 2: /* Designate USASCII for character sets G0-G3 (DECANM), and set VT100 mode. */
-	case 3: /* 132 Column Mode (DECCOLM) */
-	case 4: /* Smooth (Slow) Scroll (DECSCLM) */
-	case 5: /* Reverse Video (DECSCNM) */
-	case 6: /* Origin Mode (DECOM) */
-	case 7: /* Wraparound Mode (DECAWM) */
-	case 8: /* Auto-repeat Keys (DECARM) */
-	case 9: /* Send Mouse X & Y on button press. See the section Mouse Tracking. */
-	case 10: /* Show toolbar (rxvt) */
-	case 12: /* Start Blinking Cursor (att610) */
-	case 18: /* Print form feed (DECPFF) */
-	case 19: /* Set print extent to full screen (DECPEX) */
-	case 25: /* Show Cursor (DECTCEM) */
-	case 30: /* Show scrollbar (rxvt). */
-	case 35: /* Enable font-shifting functions (rxvt). */
-	case 38: /* Enter Tektronix Mode (DECTEK) */
-	case 40: /* Allow 80 → 132 Mode */
-	case 41: /* more(1) fix (see curses resource) */
-	case 42: /* Enable Nation Replacement Character sets (DECNRCM) */
-	case 44: /* Turn On Margin Bell */
-	case 45: /* Reverse-wraparound Mode */
-	case 46: /* Start Logging (normally disabled by a compile-time option) */
-	case 47: /* Use Alternate Screen Buffer (unless disabled by the titeInhibit resource) */
-	case 66: /* Application keypad (DECNKM) */
-	case 67: /* Backarrow key sends backspace (DECBKM) */
-	case 1000: /* Send Mouse X & Y on button press and release. See the section Mouse Tracking. */
-	case 1001: /* Use Hilite Mouse Tracking. */
-	case 1002: /* Use Cell Motion Mouse Tracking. */
-	case 1003: /* Use All Motion Mouse Tracking. */
-	case 1010: /* Scroll to bottom on tty output (rxvt). */
-	case 1011: /* Scroll to bottom on key press (rxvt). */
-	case 1035: /* Enable special modifiers for Alt and NumLock keys. */
-	case 1036: /* Send ESC when Meta modifies a key (enables the metaSendsEscape resource). */
-	case 1037: /* Send DEL from the editing-keypad Delete key */
-	case 1047: /* Use Alternate Screen Buffer (unless disabled by the titeInhibit resource) */
-	case 1048: /* Save cursor as in DECSC (unless disabled by the titeInhibit resource) */
-	case 1049: /* Save cursor as in DECSC and use Alternate Screen Buffer, clearing it first (unless disabled by the titeInhibit resource). This combines the effects of the 1 0 4 7 and 1 0 4 8 modes. Use this with terminfo-based applications rather than the 4 7 mode. */
-	case 1051: /* Set Sun function-key mode. */
-	case 1052: /* Set HP function-key mode. */
-	case 1053: /* Set SCO function-key mode. */
-	case 1060: /* Set legacy keyboard emulation (X11R6). */
-	case 1061: /* Set Sun/PC keyboard emulation of VT220 keyboard. */
-	case 2004: /* Set bracketed paste mode. */
-	default:
-		return -1;
-	};
-}
-
-static void sterm_clear(struct sterm *term, size_t col, size_t row, u32 color)
-{
-	term->ops->clear_char(term, col, row, color);
-}
-
 static void sterm_exec_dec(struct sterm *term, char *escape)
 {
 	size_t len = strlen(escape);
@@ -88,7 +205,7 @@ static void sterm_exec_dec(struct sterm *term, char *escape)
 		return;
         char cmd = escape[len - 1];
 
-	while (*escape && !isalpha(*escape) && *escape != '~') {
+	while (*escape && sterm_is_terminator(*escape)) {
 		long i = 0;
 
 		if (isdigit(*escape)) {
@@ -102,7 +219,7 @@ static void sterm_exec_dec(struct sterm *term, char *escape)
 				bool hide = cmd == 'l';
 
 				if (hide) {
-					sterm_clear(term, term->col, term->row, term->bg_color);
+					sterm_clear_cursor(term);
 				}
 				term->draw_cursor = !hide;
 			} else {
@@ -178,7 +295,10 @@ static void sterm_select_sgr(struct sterm *term, char *escape, int i)
 	if (i == 0) {
 		term->fg_color = sterm_get_color(term, TERMCOLOR_WHITE);
 		term->bg_color = sterm_get_color(term, TERMCOLOR_BLACK);
-		return;
+	} else if (i == 7) {
+		term->inverse = true;
+	} else if (i == 27) {
+		term->inverse = false;
 	} else if (i == 38 || i == 48) {
 		if (*escape++ != ';')
 			return;
@@ -204,15 +324,12 @@ static void sterm_select_sgr(struct sterm *term, char *escape, int i)
 			if (i == 48)
 				term->bg_color = color;
 		}
-		return;
-	}
-
-	/* TODO bold, underline, inverse */
-	if (i >= 30 && i < 37) {
+	} else if (i >= 30 && i < 37) {
 		term->fg_color = sterm_get_color(term, colors[i - 30]);
 	} else if (i >= 40 && i < 47) {
 		term->bg_color = colors[i - 40];
 	}
+	/* TODO bold, underline */
 }
 
 /* https://poor.dev/blog/terminal-anatomy/ */
@@ -256,17 +373,46 @@ static void unsup_escape(const char *seq)
 	dump_escape_seq(seq);
 }
 
-static void sterm_scroll(struct sterm *term, int dir)
+static void sterm_exec_osc(struct sterm *term, char *escape)
 {
-	if (term->ops->scroll) {
-		term->ops->scroll(term, term->bg_color, dir);
-	} else {
-		/* TODO */
+	char *saved = escape;
+	long ps;
+
+	ps = strtol(escape, &escape, 10);
+	/* TODO check for errors */
+
+	if (*escape++ != ';')
+		return;
+
+	bool quest = false;
+	if (*escape == '?') {
+		quest = true;
+		escape += 1;
+	}
+
+	switch (ps) {
+	case 10:
+		if (!quest)
+			break;
+		sterm_printf(term, "%s[10;rgb:ffff/ffff/ffff", TERM_CSI);
+		return;
+	case 11:
+		if (!quest)
+			break;
+		sterm_printf(term, "%s[11;rgb:0000/0000/0000", TERM_CSI);
+		return;
+	}
+
+	if (!quest) {
+		fprintf(stderr, "unsupported OSC:\n");
+		unsup_escape(escape);
+		return;
 	}
 }
 
 static void sterm_exec_control_char(struct sterm *term, char ch)
 {
+	fprintf(stderr, "exec control char '%c'\n", ch);
 	switch (ch) {
 	case 'M':
 		fprintf(stderr, "move cursor up\n");
@@ -281,9 +427,18 @@ static void sterm_exec_control_char(struct sterm *term, char ch)
 		break;
 	case '\\':
 		term->dcs = false;
+		if (term->in_osc)
+			sterm_exec_osc(term, term->osc_seq);
+		term->in_osc = false;
+		break;
+	case '>':
+		/* TODO exit alternate keypad mode */
+		break;
+	case ']':
+		term->in_osc = true;
 		break;
 	default:
-		fprintf(stderr, "unknown controll char: '%c'\n", ch);
+		fprintf(stderr, "unknown control char: '%c'\n", ch);
 		break;
 	}
 }
@@ -302,14 +457,33 @@ static void sterm_exec_escape(struct sterm *term, char *escape)
 		return;
 	}
 
+	if (*escape == '!') {
+		if (*++escape != 'p') {
+			unsup_escape(saved);
+		} else {
+			sterm_reset(term);
+		}
+	}
+	
 	size_t len = strlen(escape);
 	if (!len)
 		return;
         char cmd = escape[len - 1];
+	bool angle = false;
+
+	if (*escape == '>') {
+		escape += 1;
+		angle = true;
+	}
 
         do {
 		long i = 0;
 		long j = 0;
+
+		if (!isdigit(*escape) && *escape != ';' && !sterm_is_terminator(*escape)) {
+			unsup_escape(saved);
+			break;
+		}
 
 		if (isdigit(*escape)) {
 			i = atoi(escape);
@@ -322,22 +496,38 @@ static void sterm_exec_escape(struct sterm *term, char *escape)
 
 		switch (cmd) {
 		case 'm': /* select graphic rendition */
+			if (angle) {
+				unsup_escape(saved);
+				break;
+			}
 			if (*escape == '%')
 				return;
 			sterm_select_sgr(term, escape, i);
 			break;
 		case 'H': /* set cursor pos */
+			sterm_clear_cursor(term);
 			if (*escape == ';') {
 				escape += 1;
 				j = strtol(escape, &escape, 10);
 			}
+
+			if (i > term->height)
+				i = term->height;
+			if (j > term->width)
+				j = term->width;
+
+			if (i)
+				i -= 1;
+			if (j)
+				j -= 1;
+
 			term->row = i;
 			term->col = j;
 			break;
 		case 'J': /* clear screen from cursor to end */
 			for (unsigned row = term->row; row < term->height; row++) {
 				for (unsigned col = term->col; col < term->width; col++) {
-						term->ops->clear_char(term, col, row, term->bg_color);
+						sterm_clear_char(term, col, row, term->bg_color);
 				}
 			}
 			break;
@@ -357,20 +547,75 @@ static void sterm_exec_escape(struct sterm *term, char *escape)
 			}
 
 			for (unsigned col = start; col < end; col++) {
-					term->ops->clear_char(term, col, term->row, term->bg_color);
+					sterm_clear_char(term, col, term->row, term->bg_color);
 			}
 			break;
 		}
+		case 'P': /* delete N characters start at cursor pos */
+			if (!i)
+				sterm_delete_chars(term, term->col, term->row, i);
+			break;
+		case 'A': /* move cursor up */
+			if (!i)
+				i = 1;
+			if (i > term->row)
+				i = term->row;
+			term->row -= i;
+			break;
 		case 'n': /* report cursor pos */
 			if (i == 6)
 				sterm_printf(term, "%s%u;%uR", TERM_CSI, term->row, term->col);
+			else
+				unsup_escape(saved);
 			break;
 		case 'C': /* move cursor right */
-			/* TODO check for overflow */
+			sterm_clear_cursor(term);
+			if (!i)
+				i = 1;
+
+			if (i > (term->width - term->col))
+				i = term->width - term->col;
+
 			term->col += i;
-			if (term->col >= term->width)
-				term->col = term->width - 1;
 			break;
+		case 'D': /* move cursor left */
+			sterm_clear_cursor(term);
+			if (!i)
+				i = 1;
+			if (i > term->col)
+				i = term->col;
+
+			term->col -= i;
+			break;
+		case 'c':
+			if (angle) {
+				if (i != 0) {
+					fprintf(stderr, "unknown identification request %li\n", i);
+				} else {
+					sterm_printf(term, "%s>1;95;0c", TERM_CSI);
+					break;
+				}
+			}
+
+			unsup_escape(saved);
+			break;
+		case 'r': /* set scroll region */
+			if (*escape++ != ';')
+				return;
+			j = strtol(escape, &escape, 10);
+			/* TODO check for errors */
+
+			if (i)
+				i -= 1;
+			if (j > term->height)
+				j = term->height;
+			term->scroll_bot = i;
+			term->scroll_top = j;
+			break;
+		case 'p': /* soft reset */
+			if (*escape++ != '!')
+				return;
+			sterm_reset(term);
 		default:
 			unsup_escape(saved);
 
@@ -380,7 +625,7 @@ static void sterm_exec_escape(struct sterm *term, char *escape)
 
 		if (*escape == ';')
 			escape++;
-	} while (*escape && !isalpha(*escape) && *escape != '~');
+	} while (*escape && !sterm_is_terminator(*escape));
 }
 
 static void sterm_put_escaped(struct sterm *term, u32 cp)
@@ -400,14 +645,36 @@ static void sterm_put_escaped(struct sterm *term, u32 cp)
 		return;
 	}
 
-	if (isalpha(ch) || ch == '~') {
+	if (sterm_is_terminator(ch)) {
 		/* end of escape sequence */
 		term->escape_seq[term->escape_off] = '\0';
+
 		fprintf(stderr, "exec escape seq:\n");
 		dump_escape_seq(term->escape_seq);
+
 		sterm_exec_escape(term, term->escape_seq);
 		term->in_escape = false;
 		term->escape_off = 0;
+	}
+}
+
+static void sterm_put_osc(struct sterm *term, u32 cp)
+{
+	if (!sterm_is_escape_ch(cp) || term->osc_off >= sizeof(term->osc_seq) - 1) {
+		term->osc_off = 0;
+		term->in_osc = false;
+		return;
+	}
+
+	char ch = (char) cp;
+
+	if (sterm_is_terminator(ch) || ch == '\a') {
+		sterm_exec_osc(term, term->osc_seq);
+		term->osc_off = 0;
+		term->in_osc = false;
+	} else {
+		term->osc_seq[term->osc_off++] = ch;
+		term->osc_seq[term->osc_off] = '\0';
 	}
 }
 
@@ -421,18 +688,12 @@ static void sterm_newline(struct sterm *term)
 
 static void sterm_put_normal(struct sterm *term, u32 cp)
 {
-	term->ops->draw_char(term, term->col++, term->row, term->fg_color, term->bg_color, cp);
+	sterm_put_at(term, term->col++, term->row, cp, sterm_get_fg(term), sterm_get_bg(term));
 
 	if (term->col == term->width) {
 		term->col = 0;
 		sterm_newline(term);
 	}
-}
-
-static void sterm_draw_cursor(struct sterm *term)
-{
-	if (term->draw_cursor)
-		sterm_clear(term, term->col, term->row, term->fg_color);
 }
 
 i64 enc_push_byte(struct enc_ctx *ctx, u8 byte)
@@ -455,6 +716,11 @@ static void sterm_put(struct sterm *term, u8 b)
 		return;
 	}
 
+	if (term->in_osc) {
+		sterm_put_osc(term, cp);
+		return;
+	}
+
 	switch (b) {
 	case 0x00:
 		break;
@@ -465,18 +731,20 @@ static void sterm_put(struct sterm *term, u8 b)
 		sterm_newline(term);
 		break;
 	case CARRIAGE_RETURN:
-		sterm_clear(term, term->col, term->row, term->bg_color);
+		sterm_clear_cursor(term);
 		term->col = 0;
 		break;
 	case BACKSPACE:
 		if (term->col) {
-			sterm_clear(term, term->col, term->row, term->bg_color);
+			sterm_clear_cursor(term);
 			term->col -= 1;
 		}
 		break;
 	case '\t':
 		for (int i = 0; i < 4; i++)
 			sterm_put(term, ' ');
+		break;
+	case '\a': /* bell */
 		break;
 	default:
 		if (!term->dcs)
@@ -494,7 +762,7 @@ void sterm_write(struct sterm *term, const void *buf, size_t n)
 	sterm_draw_cursor(term);
 }
 
-void sterm_init(struct sterm *term, const struct term_ops *ops, void *ctx)
+int sterm_init(struct sterm *term, const struct term_ops *ops, void *ctx)
 {
 	term->row = 0;
 	term->col = 0;
@@ -503,14 +771,27 @@ void sterm_init(struct sterm *term, const struct term_ops *ops, void *ctx)
 	term->escape_off = 0;
 	term->ops = ops;
 	term->dcs = false;
+	term->in_osc = false;
 
 	term->draw_cursor = true;
 
 	term->ops->get_dimensions(term, &term->width, &term->height);
 	printf("width: %u height: %u\n", term->width, term->height);
 
+	term->scroll_top = 0;
+	term->scroll_bot = term->height;
+
 	/* TODO init encoder */
 
-	term->fg_color = sterm_get_color(term, TERMCOLOR_WHITE);
-	term->bg_color = sterm_get_color(term, TERMCOLOR_BLACK);
+	term->white = sterm_get_color(term, TERMCOLOR_WHITE);
+	term->black = sterm_get_color(term, TERMCOLOR_BLACK);
+	term->inverse = false;
+
+	term->fg_color = term->white;
+	term->bg_color = term->black;
+
+	term->chars = calloc(term->width * term->height, sizeof(*term->chars));
+	if (!term->chars)
+		return -1;
+	return 0;
 }

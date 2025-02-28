@@ -5,13 +5,15 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdarg.h>
-
+#include <sterm/parser.h>
 #include <sterm/types.h>
+
+struct term;
+struct termops;
+struct encoder;
 
 extern unsigned char psf2_default_font[];
 extern unsigned int psf2_default_font_len;
-
-#define DEC_BRACKETED_PASTE_BIT 44
 
 struct psf2_hdr {
 	u32 magic;
@@ -51,17 +53,12 @@ struct framebuf {
 	u8 green_mask_size;
 	u8 green_mask_shift;
 
+	u8 font_size;
+
 	struct font font;
 
 	unsigned char *pixels;
 };
-
-struct enc_ctx {
-	size_t off;
-	char buf[8];
-};
-
-struct sterm;
 
 enum termcolor {
 	TERMCOLOR_BLACK,
@@ -82,51 +79,79 @@ enum termcolor {
 	TERMCOLOR_BRIGHT_WHITE,
 };
 
-struct term_ops {
-	/* minimum required */
-	void (*draw_char)(struct sterm *, size_t cx, size_t cy, u32 fg, u32 bg, u32 cp);
-	void (*clear_char)(struct sterm *, size_t cx, size_t cy, u32 color);
-	void (*get_dimensions)(struct sterm *, unsigned *cols, unsigned *rows);
-
-	/* at least one of: */
-        u32 (*encode_color)(struct sterm *, enum termcolor);
-        u32 (*encode_rgb)(struct sterm *, u8 r, u8 g, u8 b);	/* needed for 24-bit terminals */
-
-	/* optimized/extension functions */
-	void (*scroll)(struct sterm *, u32 bg, int dir);
+struct encoder_ops {
+	i64 (*put)(struct encoder *, char ch);
 };
 
-struct sterm {
+struct encoder {
+	char buf[16];
+	unsigned char offset;
+	const struct encoder_ops *ops;
+};
+
+struct termchar {
+	u32 cp;
+	u32 fg;
+	u32 bg;
+	/* TODO erasable? */
+};
+
+struct termops {
+	/* mandatory */
+	void (*draw_char)(struct term *, unsigned cx, unsigned cy, u32 cp, u32 fg, u32 bg);
+	void (*clear_char)(struct term *, unsigned cx, unsigned cy, u32 col);
+	void (*get_dimensions)(struct term *, unsigned *cols, unsigned *rows);
+
+	/* at least one of: */
+        u32 (*encode_color)(struct term *, enum termcolor);
+        u32 (*encode_rgb)(struct term *, u8 r, u8 g, u8 b);	/* needed for 24-bit terminals */
+
+	/* optional */
+	void (*release)(void *);
+};
+
+struct term {
 	unsigned row;
 	unsigned col;
-	unsigned width;
-	unsigned height;
+
+	unsigned rows;
+	unsigned cols;
+
+	struct encoder encoder;
 
 	u32 fg_color;
 	u32 bg_color;
+	u32 black;
+	u32 white;
+	bool inverse;
 
-	bool in_escape;
-	u8 escape_off;
-	char escape_seq[64];
-	bool dcs;
+	unsigned scroll_top;
+	unsigned scroll_bot;
 
-	bool draw_cursor;
+	unsigned char buf[64];
+	unsigned char buf_off;
+	bool overflowed;
 
-	void *priv;
-	const struct term_ops *ops;
-	struct enc_ctx encoder;
+	unsigned short params[16];
+	unsigned short param;
+	unsigned char nparams;
+
+	struct parser parser;
+
+	struct termchar *chars;
+	const struct termops *ops;
 
 	int fd;
+
+	void *priv;
 };
 
 
-i64 enc_push_byte(struct enc_ctx *ctx, u8 byte);
+extern const struct termops fb_ops;
 
-void sterm_init(struct sterm *term, const struct term_ops *ops, void *ctx);
-void sterm_free(struct sterm *term);
-void sterm_write(struct sterm *term, const void *buf, size_t n);
-
-extern const struct term_ops fb_ops;
+int term_init(struct term *term, const struct termops *ops, void *ctx);
+void term_free(struct term *term);
+void term_write(struct term *term, const void *buf, size_t n);
 
 __attribute__((format(printf, 3, 4)))
 int printx(int (*put)(int c, void *), void *opaque, const char *fmt, ...);
