@@ -1,6 +1,6 @@
-#define FONT_SIZE 2
-#define FONT_WIDTH 8
-#define FONT_HEIGHT 8
+#define FONT_SIZE 1
+#define FONT_WIDTH 12
+#define FONT_HEIGHT 24
 
 #define COLS 80
 #define ROWS 24
@@ -208,6 +208,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
 	fb.font_size = FONT_SIZE;
 
 	rc = font_read_from(&fb.font, psf2_default_font, psf2_default_font_len);
+	assert(!rc);
+	rc = font_read_from(&fb.bold_font, psf2_default_bold_font, psf2_default_bold_font_len);
 	assert(!rc);
 
 	printf("pixel format: '%s'\n", SDL_GetPixelFormatName(surface->format));

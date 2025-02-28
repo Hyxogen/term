@@ -10,12 +10,16 @@
 
 #define TERM_DEFAULT_TABSTOP 8
 
+#define SGR_FLAG_BOLD 0x01
+
 struct term;
 struct termops;
 struct encoder;
 
-extern unsigned char psf2_default_font[];
-extern unsigned int psf2_default_font_len;
+extern const unsigned char psf2_default_font[];
+extern const unsigned int psf2_default_font_len;
+extern const unsigned char psf2_default_bold_font[];
+extern const unsigned int psf2_default_bold_font_len;
 
 struct psf2_hdr {
 	u32 magic;
@@ -58,6 +62,7 @@ struct framebuf {
 	u8 font_size;
 
 	struct font font;
+	struct font bold_font;
 
 	unsigned char *pixels;
 };
@@ -95,12 +100,12 @@ struct termchar {
 	u32 cp;
 	u32 fg;
 	u32 bg;
-	/* TODO erasable? */
+	unsigned flags;
 };
 
 struct termops {
 	/* mandatory */
-	void (*draw_char)(struct term *, unsigned cx, unsigned cy, u32 cp, u32 fg, u32 bg);
+	void (*draw_char)(struct term *, unsigned cx, unsigned cy, u32 cp, u32 fg, u32 bg, unsigned flags);
 	void (*clear_char)(struct term *, unsigned cx, unsigned cy, u32 col);
 	void (*get_dimensions)(struct term *, unsigned *cols, unsigned *rows);
 
@@ -127,6 +132,7 @@ struct term {
 	u32 white;
 	bool inverse;
 	bool draw_cursor;
+	unsigned sgr_flags;
 
 	unsigned scroll_top;
 	unsigned scroll_bot;

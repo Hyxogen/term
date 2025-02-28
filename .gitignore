@@ -6,3 +6,4 @@
 /include/sterm/parser.h
 /src/parser.c
 *.swp
+*.psf

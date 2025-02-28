@@ -149,7 +149,7 @@ static void term_redraw(struct term *term, unsigned cx, unsigned cy)
 		term->ops->clear_char(term, cx, cy, ch->bg);
 	else
 		term->ops->draw_char(term, cx, cy, ch->fg, ch->bg,
-				     ch->cp);
+				     ch->cp, ch->flags);
 }
 
 static void sterm_redraw_row(struct term *term, unsigned cy)
@@ -211,7 +211,7 @@ static void term_scroll(struct term *term, int dir)
 	sterm_redraw(term);
 }
 
-static void term_put_char(struct term *term, unsigned cx, unsigned cy, u32 cp, u32 fg, u32 bg)
+static void term_put_char(struct term *term, unsigned cx, unsigned cy, u32 cp, u32 fg, u32 bg, unsigned flags)
 {
 	struct termchar *ch = term_get_at(term, cx, cy);
 	ch->cp = cp;
@@ -223,6 +223,7 @@ static void term_put_char(struct term *term, unsigned cx, unsigned cy, u32 cp, u
 		ch->fg = fg;
 		ch->bg = bg;
 	}
+	ch->flags = flags;
 	term_redraw(term, cx, cy);
 }
 
@@ -232,7 +233,7 @@ static void term_draw_cursor(struct term *term)
 		return;
 
 	struct termchar *ch = term_get_at(term, term->col, term->row);
-	term->ops->draw_char(term, term->col, term->row, term->black, term->white, ch->cp ? ch->cp : ' ');
+	term->ops->draw_char(term, term->col, term->row, term->black, term->white, ch->cp ? ch->cp : ' ', ch->flags);
 }
 
 static void term_clear_cursor(struct term *term)
@@ -359,6 +360,10 @@ static void term_exec_sgr(struct term *term)
 			term->fg_color = term->white;
 			term->bg_color = term->black;
 			term->inverse = false;
+			term->sgr_flags = 0;
+			break;
+		case 1:
+			term->sgr_flags |= SGR_FLAG_BOLD;
 			break;
 		case 7:
 		case 27:
@@ -373,7 +378,7 @@ static void term_exec_sgr(struct term *term)
 
 static void term_erase_char(struct term *term, unsigned cx, unsigned cy)
 {
-	term_put_char(term, cx, cy, 0, term->fg_color, term->bg_color);
+	term_put_char(term, cx, cy, 0, term->fg_color, term->bg_color, 0);
 }
 
 static void term_erase_range(struct term *term, unsigned ax, unsigned ay, unsigned bx, unsigned by)
@@ -609,7 +614,7 @@ static void term_print(struct term *term, u32 cp)
 {
 	term_clear_cursor(term);
 
-	term_put_char(term, term->col++, term->row, cp, term->fg_color, term->bg_color);
+	term_put_char(term, term->col++, term->row, cp, term->fg_color, term->bg_color, term->sgr_flags);
 
 	if (term->col == term->cols) {
 		term->col = 0;

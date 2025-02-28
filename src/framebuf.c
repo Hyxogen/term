@@ -49,10 +49,12 @@ static void fb_clear(struct term *term, unsigned col, unsigned row, u32 color)
 	}
 }
 
-static void fb_draw_char(struct term *term, unsigned col, unsigned row, u32 fg, u32 bg, u32 cp)
+static void fb_draw_char(struct term *term, unsigned col, unsigned row, u32 fg, u32 bg, u32 cp, unsigned flags)
 {
 	struct framebuf *fb = term->priv;
 	struct font *font = &fb->font;
+	if (flags & SGR_FLAG_BOLD)
+		font = &fb->bold_font;
 
 	const u8 *glyph = font_get_glyph(font, cp);
 
