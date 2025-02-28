@@ -184,12 +184,16 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
 	} else if (rc == 0) {
 		const char *prog = "/bin/bash";
 		setenv("TERM", "vt220", 1);
+
+		char buffer[128];
+		snprintf(buffer, sizeof(buffer), "%u", ROWS);
+		setenv("LINES", buffer, 1);
+		snprintf(buffer, sizeof(buffer), "%u", COLS);
+		setenv("COLUMNS", buffer, 1);
+
                 char *const args[] = {
                     NULL,
                 };
-                char *const env[] = {
-			"TERM=vt220",
-		};
 
 		execvp(prog, args);
 		perror("execvpe");
