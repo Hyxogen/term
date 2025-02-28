@@ -1,0 +1,3 @@
+vt220+col|DEC VT220 with colors,
+	use=vt220,
+	colors#8,

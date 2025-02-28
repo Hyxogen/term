@@ -185,11 +185,17 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
 		const char *prog = "/bin/bash";
 		setenv("TERM", "vt220", 1);
 
-		char buffer[128];
+		char path[4096];
+		char buffer[256];
 		snprintf(buffer, sizeof(buffer), "%u", ROWS);
 		setenv("LINES", buffer, 1);
 		snprintf(buffer, sizeof(buffer), "%u", COLS);
 		setenv("COLUMNS", buffer, 1);
+
+		getcwd(path, sizeof(path));
+		snprintf(buffer, sizeof(buffer), "%.*s/terminfo", (int) sizeof(path), path);
+
+		setenv("TERMINFO", buffer, 1);
 
                 char *const args[] = {
                     NULL,

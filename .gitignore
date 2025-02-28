@@ -7,3 +7,4 @@
 /src/parser.c
 *.swp
 *.psf
+/terminfo
