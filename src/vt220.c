@@ -8,8 +8,12 @@
 #include <stdlib.h>
 
 #define DECTCEM 25 /* text cursor enable */
+#define TERM_CSI "\033"
 
 #define eprintln(...) fprintf(stderr, __VA_ARGS__)
+
+#define MIN(a, b) ((a) <= (b) ? (a) : (b))
+#define MAX(a, b) ((a) >= (b) ? (a) : (b))
 
 void collect(struct parser *ctx, uint32_t cp)
 {
@@ -73,16 +77,18 @@ void put(struct parser *ctx, uint32_t cp)
 {
 	(void)ctx;
 	(void)cp;
-	fprintf(stderr, "tried to put\n");
 	/* TODO */
 }
 
 void hook(struct parser *ctx, uint32_t cp)
 {
-	(void)ctx;
-	(void)cp;
-	/* TODO */
-	fprintf(stderr, "tried to hook\n");
+	struct term *term = ctx->priv;
+
+	switch (cp) {
+	default:
+		fprintf(stderr, "unsupported DCS '%c'\n", cp);
+		break;
+	}
 }
 
 void unhook(struct parser *ctx, uint32_t cp)
@@ -90,7 +96,6 @@ void unhook(struct parser *ctx, uint32_t cp)
 	(void)ctx;
 	(void)cp;
 	/* TODO */
-	fprintf(stderr, "tried to unhook\n");
 }
 
 void clear(struct parser *ctx, uint32_t cp)
@@ -148,13 +153,13 @@ static void term_scroll(struct term *term, int dir)
 		region_start = (void*) &term->chars[term->cols * (-dir + term->scroll_top)];
 		paste_start = (void*) &term->chars[term->cols * term->scroll_top];
 
-		nlines = term->rows + dir;
+		nlines = term->scroll_bot + dir;
 	} else {
 		/* scroll down */
 		region_start = (void*) &term->chars[term->cols * term->scroll_top];
 		paste_start = (void*) &term->chars[term->cols * (dir + term->scroll_top)];
 
-		nlines = term->rows - dir;
+		nlines = term->scroll_bot - dir;
 	}
 
 	if (nlines > term->scroll_bot - term->scroll_top)
@@ -168,9 +173,9 @@ static void term_scroll(struct term *term, int dir)
 
 	memmove(paste_start, region_start, region_end - region_start);
 
-	if (dir > 0)
-		memset(term->chars, 0, paste_start - (char*) term->chars);
-	if (dir < 0) {
+	if (dir > 0) {
+		memset(region_start, 0, paste_start - region_start);
+	} else {
 		assert(end >= paste_end);
 		memset(paste_end, 0, end - paste_end);
 	}
@@ -181,7 +186,6 @@ static void term_scroll(struct term *term, int dir)
 static void term_put_char(struct term *term, unsigned cx, unsigned cy, u32 cp, u32 fg, u32 bg)
 {
 	struct termchar *ch = term_get_at(term, cx, cy);
-
 	ch->cp = cp;
 
 	if (term->inverse) {
@@ -210,7 +214,7 @@ static void term_clear_cursor(struct term *term)
 
 static void term_linefeed(struct term *term)
 {
-	if (++term->row == term->rows) {
+	if (++term->row >= term->scroll_bot) {
 		term->row -= 1;
 		term_scroll(term, -1);
 	}
@@ -222,6 +226,8 @@ void execute(struct parser *ctx, uint32_t cp)
 
 	term_clear_cursor(term);
 	switch (cp) {
+	case 0x00: /* null, NUL */
+		break;
 	case 0x07: /* bell, BEL */
 		break;
 	case 0x08: /* backspace, BS */
@@ -234,6 +240,7 @@ void execute(struct parser *ctx, uint32_t cp)
 	case 0x0d: /* carriage return, CR */
 		term->col = 0;
 		break;
+	/* TODO tabs */
 	default:
 		fprintf(stderr, "unsupported control char 0x%02x\n", cp);
 		break;
@@ -242,13 +249,21 @@ void execute(struct parser *ctx, uint32_t cp)
 	term_draw_cursor(term);
 }
 
-static unsigned short term_get_param(struct term *term, unsigned short idx)
+static unsigned short term_get_param(const struct term *term, unsigned short idx)
 {
 	assert(idx < (sizeof(term->params)/sizeof(term->params[0])));
 
 	if (idx >= term->nparams)
 		return 0;
 	return term->params[idx];
+}
+
+static unsigned short term_get_param_def(const struct term *term, unsigned short idx, unsigned short def)
+{
+	unsigned i = term_get_param(term, idx);
+	if (!i)
+		return def;
+	return i;
 }
 
 static void dec_mode_exec(struct term *term, uint32_t cp)
@@ -268,6 +283,11 @@ static void dec_mode_exec(struct term *term, uint32_t cp)
 	switch (param) {
 	case DECTCEM:
 		term->draw_cursor = set;
+
+		if (set)
+			term_draw_cursor(term);
+		else
+			term_clear_cursor(term);
 		break;
 	default:
 		fprintf(stderr, "unsupported dec mode %u\n", param);
@@ -300,26 +320,49 @@ static void term_erase_range(struct term *term, unsigned ax, unsigned ay, unsign
 {
 	if (ay > by) {
 		term_erase_range(term, bx, by, ax, ay);
-		return;
 	} if (ay == by && ax > bx) {
 		term_erase_range(term, bx, by, ax, ay);
-		return;
-	}
+	} else {
+		unsigned col = ax;
+		unsigned row = ay;
+		unsigned beg = ay * term->cols + ax;
+		unsigned end = by * term->cols + bx;
+		assert(end <= term->rows * term->cols);
 
-	if (ay == by) {
-		for (unsigned col = ax; col < by; col++) {
-			term_erase_char(term, col, ay);
+		for (; beg < end; beg++, col++) {
+			if (col && (col % term->cols) == 0) {
+				col = 0;
+				row += 1;
+			}
+
+			term_erase_char(term, col, row);
 		}
-		return;
 	}
+}
 
-	term_erase_range(term, ax, ay, term->rows, ay);
+static int term_put_secondary(int i, void *opaque)
+{
+	struct term *term = opaque;
+	char ch = (char) i;
+	return (int) write(term->fd, &ch, 1);
+}
 
-	for (unsigned row = ay+1; row < by; row++) {
-		term_erase_range(term, 0,row, term->rows, row);
-	}
+__attribute__((format(printf, 2, 3)))
+static int term_printf(struct term *term, const char *fmt, ...)
+{
+	va_list args ;
+	va_start(args, fmt);
 
-	term_erase_range(term, 0, by, bx, by);
+	int res = vprintx(term_put_secondary, term, fmt, args);
+
+	va_end(args);
+	return res;
+
+}
+
+static bool term_in_scroll_region(const struct term *term)
+{
+	return term->row >= term->scroll_top && term->row <= term->scroll_bot;
 }
 
 void csi_dispatch(struct parser *ctx, uint32_t cp)
@@ -338,8 +381,73 @@ void csi_dispatch(struct parser *ctx, uint32_t cp)
 	case 'm':
 		term_exec_sgr(term);
 		break;
-	case 'K':
+	case 'M': /* delete line, (DL) */
+		/* TODO this doesn't work fix this */
+
+		if (!term_in_scroll_region(term))
+			break;
+
+		long i = term_get_param_def(term, 0, 1);
+		unsigned rem = term->scroll_bot - term->rows;
+
+		if (i > rem)
+			i = rem;
+
+		unsigned saved_top = term->scroll_top;
+		term->scroll_top = term->row;
+
+		term_erase_range(term, 0, term->row, term->cols, term->row + i);
+		term_scroll(term, -i);
+
+		term->scroll_top = saved_top;
+
+		break;
+	case 'L': /* insert line, (IL) */
+		if (!term_in_scroll_region(term))
+			break;
+
+		i = term_get_param_def(term, 0, 1);
+		rem = term->scroll_bot - term->rows;
+
+		if (i > rem)
+			i = rem;
+
+		term_scroll(term, i);
+	case 'K': /* erase from cursor to end of line */
 		term_erase_range(term, term->col, term->row, term->cols, term->row);
+		break;
+	case 'J': /* erase from cursor to end of screen */
+		term_erase_range(term, term->col, term->row, 0, term->rows);
+		break;
+	case 'r': { /* set top and bottom margins (DECSTBM) */
+		unsigned top = term_get_param(term, 0);
+		unsigned bot = term_get_param(term, 1);
+
+		top = MIN(top, term->rows);
+		bot = MIN(bot, term->rows);
+
+		if (bot < top)
+			break;
+
+		if (top)
+			top--;
+		if (bot)
+			bot--;
+
+		term->scroll_top = top;
+		term->scroll_bot = bot;
+		break;
+	}
+	case 'C':
+		term_clear_cursor(term);
+
+		i = term_get_param(term, 0);
+		if (!i)
+			i = 1;
+
+		term->col = MAX(term->col - 1, term->col + i);
+
+		term_draw_cursor(term);
 		break;
 	case 'H': {
 		unsigned row = term_get_param(term, 0);
@@ -362,9 +470,19 @@ void csi_dispatch(struct parser *ctx, uint32_t cp)
 
 		break;
 	}
+	case 'n': /* device status report (DSR) */
+		switch (term_get_param(term, 0)) {
+		case 6: /* report cursor position, (CPR) */
+			term_printf(term, "%s%u;%uR", TERM_CSI, term->row + 1, term->col + 1);
+			break;
+		default:
+			fprintf(stderr, "unknown DSR parameter\n");
+			break;
+		}
+		break;
 	default:
 		fprintf(stderr, "unsupported csi sequence: %c (0x%02x)\n", cp, cp);
-		fprintf(stderr, "buf: %s\n", term->buf);
+		fprintf(stderr, "buf: \"%s\"\n", term->buf);
 
 		if (term->nparams == 0) {
 			fprintf(stderr, "no params\n");
@@ -374,9 +492,6 @@ void csi_dispatch(struct parser *ctx, uint32_t cp)
 			fprintf(stderr, "\n");
 		}
 	}
-	(void)ctx;
-	(void)cp;
-	/* TODO */
 }
 
 void esc_dispatch(struct parser *ctx, uint32_t cp)
@@ -498,6 +613,8 @@ int term_init(struct term *term, const struct termops *ops, void *ctx)
 {
 	term->row = 0;
 	term->col = 0;
+
+	term->tabstop = 4;
 
 	term->priv = ctx;
 

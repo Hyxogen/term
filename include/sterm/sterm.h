@@ -117,6 +117,8 @@ struct term {
 	unsigned rows;
 	unsigned cols;
 
+	unsigned tabstop;
+
 	struct encoder encoder;
 
 	u32 fg_color;
