@@ -6,6 +6,8 @@
 #include <assert.h>
 #include <string.h>
 #include <stdlib.h>
+/* TODO remove */
+#include <ctype.h>
 
 #define DECTCEM 25 /* text cursor enable */
 #define TERM_CSI "\033"
@@ -123,6 +125,23 @@ static struct termchar *term_get_at(struct term *term, unsigned cx, unsigned cy)
 	return &term->chars[cy * term->cols + cx];
 }
 
+__attribute__((noinline))
+void dump(struct term *term)
+{
+	for (unsigned cy = 0; cy < term->rows; cy++) {
+		fprintf(stderr, "%02u ", cy + 1);
+		for (unsigned cx = 0; cx < term->cols; cx++) {
+			struct termchar *ch = term_get_at(term, cx, cy);
+			int i = ch->cp;
+			if (!isprint(i))
+				i = ' ';
+			fprintf(stderr, "%c", ch->cp);
+		}
+		fprintf(stderr, "\n");
+	}
+}
+
+
 static void term_redraw(struct term *term, unsigned cx, unsigned cy)
 {
 	struct termchar *ch = term_get_at(term, cx, cy);
@@ -155,18 +174,20 @@ static void term_scroll(struct term *term, int dir)
 	char *paste_start;
 	size_t nlines;
 
+	assert(abs(dir) < term->scroll_bot - term->scroll_top);
+
 	if (dir < 0) {
 		/* scroll up */
 		region_start = (void*) &term->chars[term->cols * (-dir + term->scroll_top)];
 		paste_start = (void*) &term->chars[term->cols * term->scroll_top];
 
-		nlines = term->scroll_bot + dir;
+		nlines = term->scroll_bot + dir - term->scroll_top;
 	} else {
 		/* scroll down */
 		region_start = (void*) &term->chars[term->cols * term->scroll_top];
 		paste_start = (void*) &term->chars[term->cols * (dir + term->scroll_top)];
 
-		nlines = term->scroll_bot - dir;
+		nlines = term->scroll_bot - dir - term->scroll_top;
 	}
 
 	if (nlines > term->scroll_bot - term->scroll_top)
@@ -178,7 +199,13 @@ static void term_scroll(struct term *term, int dir)
 	char *region_end = region_start + nchars * sizeof(struct termchar);
 	char *paste_end = paste_start + nchars * sizeof(struct termchar);
 
+	fprintf(stderr, "BEFORE:\n");
+	dump(term);
+
 	memmove(paste_start, region_start, region_end - region_start);
+
+	fprintf(stderr, "AFTER:\n");
+	dump(term);
 
 	if (dir > 0) {
 		memset(region_start, 0, paste_start - region_start);
@@ -221,7 +248,7 @@ static void term_clear_cursor(struct term *term)
 
 static void term_linefeed(struct term *term)
 {
-	if (++term->row > term->scroll_bot) {
+	if (++term->row >= term->scroll_bot) {
 		term->row -= 1;
 		term_scroll(term, -1);
 	}
@@ -401,7 +428,7 @@ static int term_printf(struct term *term, const char *fmt, ...)
 
 static bool term_in_scroll_region(const struct term *term)
 {
-	return term->row >= term->scroll_top && term->row <= term->scroll_bot;
+	return term->row >= term->scroll_top && term->row < term->scroll_bot;
 }
 
 static void term_dump_csi(const struct term *term, u32 cp)
@@ -449,7 +476,7 @@ void csi_dispatch(struct parser *ctx, uint32_t cp)
 			i = rem;
 
 		unsigned saved_top = term->scroll_top;
-		term->scroll_top = term->row;
+		term->scroll_top = term->row + 1;
 
 		term_erase_range(term, 0, term->row, term->cols, term->row + i);
 		term_scroll(term, -i);
@@ -486,8 +513,6 @@ void csi_dispatch(struct parser *ctx, uint32_t cp)
 
 		if (top)
 			top--;
-		if (bot)
-			bot--;
 
 		term->scroll_top = top;
 		term->scroll_bot = bot;
