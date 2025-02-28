@@ -21,6 +21,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <ctype.h>
+#include <stdlib.h>
 
 static SDL_Window *window;
 static SDL_Renderer *renderer;
@@ -182,6 +183,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
 		return SDL_APP_FAILURE;
 	} else if (rc == 0) {
 		const char *prog = "/bin/bash";
+		setenv("TERM", "vt220", 1);
                 char *const args[] = {
                     NULL,
                 };

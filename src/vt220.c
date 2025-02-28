@@ -509,6 +509,24 @@ void csi_dispatch(struct parser *ctx, uint32_t cp)
 		term->scroll_bot = bot;
 		break;
 	}
+	case 'A': /* cursor up, CUP */
+		term_clear_cursor(term);
+
+		i = term_get_param_def(term, 0, 1);
+
+		term->row -= MIN(i, term->row);
+
+		term_draw_cursor(term);
+		break;
+	case 'B': /* cursor down, CUD */
+		term_clear_cursor(term);
+
+		i = term_get_param_def(term, 0, 1);
+
+		term->row = MIN(term->rows - 1, term->row + i);
+
+		term_draw_cursor(term);
+		break;
 	case 'C':
 		term_clear_cursor(term);
 
