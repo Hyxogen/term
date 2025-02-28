@@ -519,7 +519,7 @@ void csi_dispatch(struct parser *ctx, uint32_t cp)
 		if (!i)
 			i = 1;
 
-		term->col = MAX(term->col - 1, term->col + i);
+		term->col = MIN(term->cols - 1, term->col + i);
 
 		term_draw_cursor(term);
 		break;
