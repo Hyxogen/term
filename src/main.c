@@ -16,6 +16,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <sterm/sterm.h>
+#include <sterm/psf.h>
 #include <pty.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -26,6 +27,8 @@ static SDL_Renderer *renderer;
 static SDL_Surface *surface;
 static struct framebuf fb;
 static struct term term;
+static struct font font, bold_font;
+static int app_fd;
 
 int execvpe(const char *file, char *const argv[], char *const envp[]);
 
@@ -34,7 +37,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 	char buffer[512];
 
 	ssize_t nread = 0;
-	while ((nread = read(term.fd, buffer, sizeof(buffer))) > 0) {
+	while ((nread = read(app_fd, buffer, sizeof(buffer))) > 0) {
 		term_write(&term, buffer, nread);
 	}
 
@@ -105,7 +108,7 @@ static char uppercase(char ch)
 
 static SDL_AppResult app_term_write(const void *data, size_t n)
 {
-	ssize_t rc = write(term.fd, data, n);
+	ssize_t rc = write(app_fd, data, n);
 	if (rc < 0 && errno != EWOULDBLOCK) {
 		perror("write");
 		return SDL_APP_FAILURE;
@@ -164,9 +167,16 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 	return SDL_APP_CONTINUE;
 }
 
+static int term_put(int i, void* dummy)
+{
+	(void) dummy;
+	char ch = i;
+	return write(app_fd, &ch, 1);
+}
+
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
 {
-	int rc = forkpty(&term.fd, NULL, NULL, NULL);
+	int rc = forkpty(&app_fd, NULL, NULL, NULL);
 	if (rc < 0) {
 		perror("forkpty");
 		return SDL_APP_FAILURE;
@@ -194,6 +204,11 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
 	if (!surface)
 		return SDL_APP_FAILURE;
 
+	rc = psf_mem_to_font(&font, psf2_default_font, psf2_default_font_len);
+	assert(!rc);
+	rc = psf_mem_to_font(&bold_font, psf2_default_bold_font, psf2_default_bold_font_len);
+	assert(!rc);
+
 	fb.width = (unsigned)surface->w;
 	fb.height = (unsigned)surface->h;
 	fb.pitch = (unsigned)surface->pitch;
@@ -206,17 +221,14 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
 	fb.blue_mask_size = 8;
 	fb.blue_mask_shift = 0;
 	fb.font_size = FONT_SIZE;
-
-	rc = font_read_from(&fb.font, psf2_default_font, psf2_default_font_len);
-	assert(!rc);
-	rc = font_read_from(&fb.bold_font, psf2_default_bold_font, psf2_default_bold_font_len);
-	assert(!rc);
+	fb.font = &font;
+	fb.bold_font = &bold_font;
 
 	printf("pixel format: '%s'\n", SDL_GetPixelFormatName(surface->format));
 
-	term_init(&term, &fb_ops, &fb);
+	term_init(&term, &fb_ops, &fb, term_put, NULL);
 
-	rc = fcntl(term.fd, F_SETFL, O_NONBLOCK);
+	rc = fcntl(app_fd, F_SETFL, O_NONBLOCK);
 	if (rc < 0) {
 		perror("fcntl");
 		return SDL_APP_FAILURE;

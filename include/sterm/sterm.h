@@ -1,12 +1,10 @@
 #ifndef STERM_FTERM_H
 #define STERM_FTERM_H
 
-#include <unistd.h>
 #include <stdbool.h>
-#include <stdint.h>
-#include <stdarg.h>
 #include <sterm/parser.h>
 #include <sterm/types.h>
+#include <sterm/psf.h>
 
 #define TERM_DEFAULT_TABSTOP 8
 
@@ -16,36 +14,6 @@
 struct term;
 struct termops;
 struct encoder;
-
-extern const unsigned char psf2_default_font[];
-extern const unsigned int psf2_default_font_len;
-extern const unsigned char psf2_default_bold_font[];
-extern const unsigned int psf2_default_bold_font_len;
-
-struct psf2_hdr {
-	u32 magic;
-	u32 version;
-	u32 hdrsize;
-	u32 flags;
-	u32 count;
-	u32 charsize;
-	u32 height;
-	u32 width;
-};
-
-struct psf2_font {
-	struct psf2_hdr hdr;
-	u8 data[];
-};
-
-struct font {
-	const struct psf2_font *psf;
-	u8 ascii[256];
-	size_t size;
-};
-
-int font_read_from(struct font *dest, const void *src, size_t size);
-const u8 *font_get_glyph(struct font *font, u32 codepoint);
 
 struct framebuf {
 	size_t width;
@@ -62,8 +30,8 @@ struct framebuf {
 
 	u8 font_size;
 
-	struct font font;
-	struct font bold_font;
+	const struct font *font;
+	const struct font *bold_font;
 
 	unsigned char *pixels;
 };
@@ -152,20 +120,16 @@ struct term {
 	bool *tabstops;
 	const struct termops *ops;
 
-	int fd;
+	int (*put)(int, void*);
+	void *put_ctx;
 
 	void *priv;
 };
 
-
 extern const struct termops fb_ops;
 
-int term_init(struct term *term, const struct termops *ops, void *ctx);
+int term_init(struct term *term, const struct termops *ops, void *ctx, int (*put)(int, void*), void *put_ctx);
 void term_free(struct term *term);
 void term_write(struct term *term, const void *buf, size_t n);
-
-__attribute__((format(printf, 3, 4)))
-int printx(int (*put)(int c, void *), void *opaque, const char *fmt, ...);
-int vprintx(int (*put)(int, void *), void *opaque, const char *fmt, va_list ap);
 
 #endif

@@ -36,8 +36,8 @@ static void fb_clear(struct term *term, unsigned col, unsigned row, u32 color)
 {
 	struct framebuf *fb = term->priv;
 
-	u32 ch_width = fb->font.psf->hdr.width * fb->font_size;
-	u32 ch_height = fb->font.psf->hdr.height * fb->font_size;
+	u32 ch_width = fb->font->psf->hdr.width * fb->font_size;
+	u32 ch_height = fb->font->psf->hdr.height * fb->font_size;
 
 	u32 xoff = col * ch_width;
 	u32 yoff = row * ch_height;
@@ -52,9 +52,9 @@ static void fb_clear(struct term *term, unsigned col, unsigned row, u32 color)
 static void fb_draw_char(struct term *term, unsigned col, unsigned row, u32 fg, u32 bg, u32 cp, unsigned flags)
 {
 	struct framebuf *fb = term->priv;
-	struct font *font = &fb->font;
+	const struct font *font = fb->font;
 	if (flags & SGR_FLAG_BOLD)
-		font = &fb->bold_font;
+		font = fb->bold_font;
 
 	const u8 *glyph = font_get_glyph(font, cp);
 
@@ -91,8 +91,8 @@ static void fb_get_dimensions(struct term *term, unsigned *cols, unsigned *rows)
 {
 	struct framebuf *fb = term->priv;
 
-	*cols = fb->width / (fb->font.psf->hdr.width * fb->font_size);
-	*rows = fb->height / (fb->font.psf->hdr.height * fb->font_size);
+	*cols = fb->width / (fb->font->psf->hdr.width * fb->font_size);
+	*rows = fb->height / (fb->font->psf->hdr.height * fb->font_size);
 }
 
 const struct termops fb_ops = {

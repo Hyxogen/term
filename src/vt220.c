@@ -1,17 +1,24 @@
 #include <stdbool.h>
 #include <sterm/types.h>
 #include <sterm/ctrl.h>
-#include <stdio.h>
 #include <sterm/sterm.h>
 #include <assert.h>
 #include <string.h>
 #include <stdlib.h>
-#include <ctype.h>
+
+#ifndef TERM_BARE_METAL
+#define TERM_BARE_METAL 0
+#endif
+
+#if TERM_BARE_METAL
+#define eprintf(...)
+#else
+#include <stdio.h>
+#define eprintf(...) fprintf(stderr, __VA_ARGS__)
+#endif
 
 #define DECTCEM 25 /* text cursor enable */
 #define TERM_CSI "\033"
-
-#define eprintf(...) fprintf(stderr, __VA_ARGS__)
 
 #define MIN(a, b) ((a) <= (b) ? (a) : (b))
 #define MAX(a, b) ((a) >= (b) ? (a) : (b))
@@ -122,22 +129,6 @@ static struct termchar *term_get_at(struct term *term, unsigned cx, unsigned cy)
 {
 	assert(cy < term->rows && cx < term->cols);
 	return &term->chars[cy * term->cols + cx];
-}
-
-__attribute__((noinline))
-void dump(struct term *term)
-{
-	for (unsigned cy = 0; cy < term->rows; cy++) {
-		eprintf("%02u ", cy + 1);
-		for (unsigned cx = 0; cx < term->cols; cx++) {
-			struct termchar *ch = term_get_at(term, cx, cy);
-			int i = ch->cp;
-			if (!isprint(i))
-				i = ' ';
-			eprintf("%c", ch->cp);
-		}
-		eprintf("\n");
-	}
 }
 
 static void term_redraw(struct term *term, unsigned cx, unsigned cy)
@@ -407,26 +398,6 @@ static void term_erase_range(struct term *term, unsigned ax, unsigned ay, unsign
 	}
 }
 
-static int term_put_secondary(int i, void *opaque)
-{
-	struct term *term = opaque;
-	char ch = (char) i;
-	return (int) write(term->fd, &ch, 1);
-}
-
-__attribute__((format(printf, 2, 3)))
-static int term_printf(struct term *term, const char *fmt, ...)
-{
-	va_list args ;
-	va_start(args, fmt);
-
-	int res = vprintx(term_put_secondary, term, fmt, args);
-
-	va_end(args);
-	return res;
-
-}
-
 static bool term_in_scroll_region(const struct term *term)
 {
 	return term->row >= term->scroll_top && term->row < term->scroll_bot;
@@ -443,6 +414,27 @@ static void term_dump_csi(const struct term *term, u32 cp)
 		for (unsigned i = 0; i < term->nparams; i++)
 			eprintf("%u ", term->params[i]);
 		eprintf("\n");
+	}
+}
+
+static int term_put_application(struct term *term, int ch)
+{
+	if (term->put)
+		return term->put(ch, term->put_ctx);
+	return 0;
+}
+
+static void term_put_unsigned(struct term *term, unsigned i)
+{
+	if (i / 10)
+		term_put_application(term, i / 10);
+	term_put_application(term, '0' + (i % 10));
+}
+
+static void term_put_str(struct term *term, const char *str)
+{
+	while (*str) {
+		term_put_application(term, *str++);
 	}
 }
 
@@ -552,7 +544,11 @@ void csi_dispatch(struct parser *ctx, uint32_t cp)
 	case 'n': /* device status report (DSR) */
 		switch (term_get_param(term, 0)) {
 		case 6: /* report cursor position, (CPR) */
-			term_printf(term, "%s%u;%uR", TERM_CSI, term->row + 1, term->col + 1);
+			term_put_str(term, TERM_CSI);
+			term_put_unsigned(term, term->row + 1);
+			term_put_str(term, ";");
+			term_put_unsigned(term, term->col + 1);
+			term_put_str(term, "R");
 			break;
 		default:
 			eprintf("unknown DSR parameter\n");
@@ -696,7 +692,7 @@ static const struct encoder_ops ascii_ops = {
 	.put = ascii_encode,
 };
 
-int term_init(struct term *term, const struct termops *ops, void *ctx)
+int term_init(struct term *term, const struct termops *ops, void *ctx, int (*put)(int, void*), void *put_ctx)
 {
 	term->row = 0;
 	term->col = 0;
@@ -722,6 +718,7 @@ int term_init(struct term *term, const struct termops *ops, void *ctx)
 	term->black = term_get_color(term, TERMCOLOR_BLACK);
 	term->inverse = false;
 	term->draw_cursor = true;
+	term->sgr_flags = 0;
 
 	term->fg_color = term->white;
 	term->bg_color = term->black;
@@ -738,6 +735,9 @@ int term_init(struct term *term, const struct termops *ops, void *ctx)
 	}
 
 	term_reset_tabstops(term, TERM_DEFAULT_TABSTOP);
+
+	term->put = put;
+	term->put_ctx = put_ctx;
 
 	return 0;
 }

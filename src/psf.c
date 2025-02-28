@@ -1,6 +1,6 @@
 #include <sterm/sterm.h>
 
-int font_read_from(struct font *dest, const void *src, size_t size)
+int psf_mem_to_font(struct font *dest, const void *src, size_t size)
 {
 	dest->psf = (const struct psf2_font *)src;
 	dest->size = size;
@@ -40,7 +40,7 @@ int font_read_from(struct font *dest, const void *src, size_t size)
 	return 0;
 }
 
-const u8 *font_get_glyph(struct font *font, u32 codepoint)
+const u8 *font_get_glyph(const struct font *font, u32 codepoint)
 {
 	return font->psf->data +
 	       font->ascii[(u8)codepoint] * font->psf->hdr.charsize;

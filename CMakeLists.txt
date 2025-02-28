@@ -22,7 +22,6 @@ add_executable(sterm
 	src/main.c
 	src/font.c
 	src/psf.c
-	src/printx.c
 	src/framebuf.c
 	src/vt220.c
 	${CMAKE_CURRENT_BINARY_DIR}/parser.c
