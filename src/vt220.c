@@ -6,13 +6,12 @@
 #include <assert.h>
 #include <string.h>
 #include <stdlib.h>
-/* TODO remove */
 #include <ctype.h>
 
 #define DECTCEM 25 /* text cursor enable */
 #define TERM_CSI "\033"
 
-#define eprintln(...) fprintf(stderr, __VA_ARGS__)
+#define eprintf(...) fprintf(stderr, __VA_ARGS__)
 
 #define MIN(a, b) ((a) <= (b) ? (a) : (b))
 #define MAX(a, b) ((a) >= (b) ? (a) : (b))
@@ -56,7 +55,7 @@ void osc_start(struct parser *ctx, uint32_t cp)
 	(void)ctx;
 	(void)cp;
 	/* TODO */
-	fprintf(stderr, "tried to osc_start\n");
+	eprintf("tried to osc_start\n");
 }
 
 void osc_put(struct parser *ctx, uint32_t cp)
@@ -64,7 +63,7 @@ void osc_put(struct parser *ctx, uint32_t cp)
 	(void)ctx;
 	(void)cp;
 	/* TODO */
-	fprintf(stderr, "tried to osc_put\n");
+	eprintf("tried to osc_put\n");
 }
 
 void osc_end(struct parser *ctx, uint32_t cp)
@@ -72,7 +71,7 @@ void osc_end(struct parser *ctx, uint32_t cp)
 	(void)ctx;
 	(void)cp;
 	/* TODO */
-	fprintf(stderr, "tried to osc_end\n");
+	eprintf("tried to osc_end\n");
 }
 
 void put(struct parser *ctx, uint32_t cp)
@@ -88,7 +87,7 @@ void hook(struct parser *ctx, uint32_t cp)
 
 	switch (cp) {
 	default:
-		fprintf(stderr, "unsupported DCS '%c'\n", cp);
+		eprintf("unsupported DCS '%c'\n", cp);
 		break;
 	}
 }
@@ -129,18 +128,17 @@ __attribute__((noinline))
 void dump(struct term *term)
 {
 	for (unsigned cy = 0; cy < term->rows; cy++) {
-		fprintf(stderr, "%02u ", cy + 1);
+		eprintf("%02u ", cy + 1);
 		for (unsigned cx = 0; cx < term->cols; cx++) {
 			struct termchar *ch = term_get_at(term, cx, cy);
 			int i = ch->cp;
 			if (!isprint(i))
 				i = ' ';
-			fprintf(stderr, "%c", ch->cp);
+			eprintf("%c", ch->cp);
 		}
-		fprintf(stderr, "\n");
+		eprintf("\n");
 	}
 }
-
 
 static void term_redraw(struct term *term, unsigned cx, unsigned cy)
 {
@@ -289,7 +287,7 @@ void execute(struct parser *ctx, uint32_t cp)
 		break;
 	}
 	default:
-		fprintf(stderr, "unsupported control char 0x%02x\n", cp);
+		eprintf("unsupported control char 0x%02x\n", cp);
 		break;
 	}
 
@@ -316,12 +314,12 @@ static unsigned short term_get_param_def(const struct term *term, unsigned short
 static void dec_mode_exec(struct term *term, uint32_t cp)
 {
 	bool set;
-if (cp == 'h') {
+	if (cp == 'h') {
 		set = true;
 	} else if (cp == 'l') {
 		set = false;
 	} else {
-		fprintf(stderr, "unknown dec private mode suffix %c (0x%02x)\n", cp, cp);
+		eprintf("unknown dec private mode suffix %c (0x%02x)\n", cp, cp);
 		return;
 	}
 
@@ -339,7 +337,7 @@ if (cp == 'h') {
 		assert(0);
 		break;
 	default:
-		fprintf(stderr, "unsupported dec mode %u\n", param);
+		eprintf("unsupported dec mode %u\n", param);
 		break;
 	}
 }
@@ -374,7 +372,7 @@ static void term_exec_sgr(struct term *term)
 			term->inverse = param == 7;
 			break;
 		default:
-			fprintf(stderr, "unsupported SGR %u\n", param);
+			eprintf("unsupported SGR %u\n", param);
 			return;
 		}
 	}
@@ -436,15 +434,15 @@ static bool term_in_scroll_region(const struct term *term)
 
 static void term_dump_csi(const struct term *term, u32 cp)
 {
-	fprintf(stderr, "CSI %c (0x%02x)\n", cp, cp);
-	fprintf(stderr, "buf:    \"%s\"\n", term->buf);
-	fprintf(stderr, "params: ");
+	eprintf("CSI %c (0x%02x)\n", cp, cp);
+	eprintf("buf:    \"%s\"\n", term->buf);
+	eprintf("params: ");
 	if (term->nparams == 0) {
-		fprintf(stderr, "no params\n");
+		eprintf("no params\n");
 	} else {
 		for (unsigned i = 0; i < term->nparams; i++)
-			fprintf(stderr, "%u ", term->params[i]);
-		fprintf(stderr, "\n");
+			eprintf("%u ", term->params[i]);
+		eprintf("\n");
 	}
 }
 
@@ -465,7 +463,7 @@ void csi_dispatch(struct parser *ctx, uint32_t cp)
 		term_exec_sgr(term);
 		break;
 	case 'M': /* delete line, (DL) */
-		/* TODO this doesn't work fix this */
+		/* TODO check this */
 
 		if (!term_in_scroll_region(term))
 			break;
@@ -557,7 +555,7 @@ void csi_dispatch(struct parser *ctx, uint32_t cp)
 			term_printf(term, "%s%u;%uR", TERM_CSI, term->row + 1, term->col + 1);
 			break;
 		default:
-			fprintf(stderr, "unknown DSR parameter\n");
+			eprintf("unknown DSR parameter\n");
 			break;
 		}
 		break;
@@ -570,12 +568,12 @@ void csi_dispatch(struct parser *ctx, uint32_t cp)
 			term_reset_tabstops(term, TERM_DEFAULT_TABSTOP);
 			break;
 		default:
-			fprintf(stderr, "unsupported TBC parameter\n");
+			eprintf("unsupported TBC parameter\n");
 			break;
 		}
 		break;
 	default:
-		fprintf(stderr, "unsupported csi sequence: %c (0x%02x)\n", cp, cp);
+		eprintf("unsupported csi sequence: %c (0x%02x)\n", cp, cp);
 		term_dump_csi(term, cp);
 	}
 }
@@ -597,7 +595,7 @@ void esc_dispatch(struct parser *ctx, uint32_t cp)
 		term->tabstops[term->col] = true;
 		break;
 	default:
-		fprintf(stderr, "unsupported escape %c (0x%02x)\n", cp, cp);
+		eprintf("unsupported escape %c (0x%02x)\n", cp, cp);
 		break;
 	}
 
