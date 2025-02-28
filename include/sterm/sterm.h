@@ -108,12 +108,15 @@ struct sterm {
 	bool in_escape;
 	u8 escape_off;
 	char escape_seq[64];
+	bool dcs;
 
-	u64 dec_mode;
+	bool draw_cursor;
 
 	void *priv;
 	const struct term_ops *ops;
 	struct enc_ctx encoder;
+
+	int fd;
 };
 
 

@@ -5,6 +5,7 @@
 #include <string.h>
 /* TODO remove */
 #include <stdio.h>
+#include <unistd.h>
 
 #define ANSI_ESCAPE 0x1b
 #define LINEFEED 0x0a
@@ -75,6 +76,45 @@ static int get_dec_mode_bit(int Ps)
 	};
 }
 
+static void sterm_clear(struct sterm *term, size_t col, size_t row, u32 color)
+{
+	term->ops->clear_char(term, col, row, color);
+}
+
+static void sterm_exec_dec(struct sterm *term, char *escape)
+{
+	size_t len = strlen(escape);
+	if (!len)
+		return;
+        char cmd = escape[len - 1];
+
+	while (*escape && !isalpha(*escape) && *escape != '~') {
+		long i = 0;
+
+		if (isdigit(*escape)) {
+			i = atoi(escape);
+			while (isdigit(*escape))
+				escape++;
+		}
+
+		if (cmd == 'l' || cmd == 'h') {
+			if (i == 25) {
+				bool hide = cmd == 'l';
+
+				if (hide) {
+					sterm_clear(term, term->col, term->row, term->bg_color);
+				}
+				term->draw_cursor = !hide;
+			} else {
+				fprintf(stderr, "tried to change dec mode %4li (%c): unsupported\n", i, cmd);
+			}
+		} else {
+			fprintf(stderr, "unknown DEC command '%c'\n", cmd);
+		}
+	}
+
+}
+
 static u32 sterm_get_color(struct sterm *term, enum termcolor color)
 {
 	assert(term->ops->encode_color || term->ops->encode_rgb);
@@ -137,7 +177,7 @@ static void sterm_select_sgr(struct sterm *term, char *escape, int i)
 
 	if (i == 0) {
 		term->fg_color = sterm_get_color(term, TERMCOLOR_WHITE);
-		term->fg_color = sterm_get_color(term, TERMCOLOR_BLACK);
+		term->bg_color = sterm_get_color(term, TERMCOLOR_BLACK);
 		return;
 	} else if (i == 38 || i == 48) {
 		if (*escape++ != ';')
@@ -176,10 +216,11 @@ static void sterm_select_sgr(struct sterm *term, char *escape, int i)
 }
 
 /* https://poor.dev/blog/terminal-anatomy/ */
-static int sterm_put_secondary(int ch, void *opaque)
+static int sterm_put_secondary(int i, void *opaque)
 {
-	/* TODO write to attached program */
-	return 1;
+	struct sterm *term = opaque;
+	char ch = (char) i;
+	return (int) write(term->fd, &ch, 1);
 }
 
 __attribute__((format(printf, 2, 3)))
@@ -203,8 +244,48 @@ static void dump_escape_seq(const char *seq)
 		} else {
 			fprintf(stderr, "\\x%02x", (unsigned) *seq);
 		}
+
+		seq += 1;
 	}
 	fprintf(stderr, "\n");
+}
+
+static void unsup_escape(const char *seq)
+{
+	fprintf(stderr, "unsupported escape sequence:\n");
+	dump_escape_seq(seq);
+}
+
+static void sterm_scroll(struct sterm *term, int dir)
+{
+	if (term->ops->scroll) {
+		term->ops->scroll(term, term->bg_color, dir);
+	} else {
+		/* TODO */
+	}
+}
+
+static void sterm_exec_control_char(struct sterm *term, char ch)
+{
+	switch (ch) {
+	case 'M':
+		fprintf(stderr, "move cursor up\n");
+		if (term->row-- == 0) {
+			fprintf(stderr, "scroll up\n");
+			term->row = 0;
+			sterm_scroll(term, 1);
+		}
+		break;
+	case 'P': /* device control string */
+		term->dcs = true;
+		break;
+	case '\\':
+		term->dcs = false;
+		break;
+	default:
+		fprintf(stderr, "unknown controll char: '%c'\n", ch);
+		break;
+	}
 }
 
 static void sterm_exec_escape(struct sterm *term, char *escape)
@@ -212,8 +293,12 @@ static void sterm_exec_escape(struct sterm *term, char *escape)
 	char *saved = escape;
 
 	if (*escape++ != '[') {
-		fprintf(stderr, "unsupported escape sequence:\n");
-		dump_escape_seq(saved);
+		unsup_escape(saved);
+		return;
+	}
+
+	if (*escape == '?') {
+		sterm_exec_dec(term, ++escape);
 		return;
 	}
 
@@ -222,7 +307,7 @@ static void sterm_exec_escape(struct sterm *term, char *escape)
 		return;
         char cmd = escape[len - 1];
 
-        while (!isalpha(*escape) && *escape != '~') {
+        do {
 		long i = 0;
 		long j = 0;
 
@@ -237,6 +322,8 @@ static void sterm_exec_escape(struct sterm *term, char *escape)
 
 		switch (cmd) {
 		case 'm': /* select graphic rendition */
+			if (*escape == '%')
+				return;
 			sterm_select_sgr(term, escape, i);
 			break;
 		case 'H': /* set cursor pos */
@@ -265,7 +352,7 @@ static void sterm_exec_escape(struct sterm *term, char *escape)
 			} else if (i == 2) { /* entire line */
 				start = 0;
 				end = term->width;
-			} else {
+			} else if (i != 0) {
 				break;
 			}
 
@@ -285,14 +372,15 @@ static void sterm_exec_escape(struct sterm *term, char *escape)
 				term->col = term->width - 1;
 			break;
 		default:
-			fprintf(stderr, "unsupported escape sequence:\n");
-			dump_escape_seq(saved);
+			unsup_escape(saved);
+
+			escape += strlen(escape);
 			continue;
 		}
 
 		if (*escape == ';')
 			escape++;
-	}
+	} while (*escape && !isalpha(*escape) && *escape != '~');
 }
 
 static void sterm_put_escaped(struct sterm *term, u32 cp)
@@ -305,19 +393,21 @@ static void sterm_put_escaped(struct sterm *term, u32 cp)
 	char ch = (char) cp;
 	term->escape_seq[term->escape_off++] = ch;
 
+	if (term->escape_off == 1 && ch != '[') {
+		sterm_exec_control_char(term, ch);
+		term->in_escape = false;
+		term->escape_off = 0;
+		return;
+	}
+
 	if (isalpha(ch) || ch == '~') {
 		/* end of escape sequence */
 		term->escape_seq[term->escape_off] = '\0';
+		fprintf(stderr, "exec escape seq:\n");
+		dump_escape_seq(term->escape_seq);
 		sterm_exec_escape(term, term->escape_seq);
-	}
-}
-
-static void sterm_scroll(struct sterm *term, int dir)
-{
-	if (term->ops->scroll) {
-		term->ops->scroll(term, term->bg_color, dir);
-	} else {
-		/* TODO */
+		term->in_escape = false;
+		term->escape_off = 0;
 	}
 }
 
@@ -339,14 +429,10 @@ static void sterm_put_normal(struct sterm *term, u32 cp)
 	}
 }
 
-static void sterm_clear(struct sterm *term, size_t col, size_t row, u32 color)
-{
-	term->ops->clear_char(term, col, row, color);
-}
-
 static void sterm_draw_cursor(struct sterm *term)
 {
-	sterm_clear(term, term->col, term->row, term->fg_color);
+	if (term->draw_cursor)
+		sterm_clear(term, term->col, term->row, term->fg_color);
 }
 
 i64 enc_push_byte(struct enc_ctx *ctx, u8 byte)
@@ -364,8 +450,10 @@ static void sterm_put(struct sterm *term, u8 b)
 
 	u32 cp = (u32) res;
 
-	if (term->in_escape)
+	if (term->in_escape) {
 		sterm_put_escaped(term, cp);
+		return;
+	}
 
 	switch (b) {
 	case 0x00:
@@ -386,8 +474,13 @@ static void sterm_put(struct sterm *term, u8 b)
 			term->col -= 1;
 		}
 		break;
+	case '\t':
+		for (int i = 0; i < 4; i++)
+			sterm_put(term, ' ');
+		break;
 	default:
-		sterm_put_normal(term, cp);
+		if (!term->dcs)
+			sterm_put_normal(term, cp);
 		break;
 	}
 }
@@ -409,6 +502,9 @@ void sterm_init(struct sterm *term, const struct term_ops *ops, void *ctx)
 	term->priv = ctx;
 	term->escape_off = 0;
 	term->ops = ops;
+	term->dcs = false;
+
+	term->draw_cursor = true;
 
 	term->ops->get_dimensions(term, &term->width, &term->height);
 	printf("width: %u height: %u\n", term->width, term->height);

@@ -2,6 +2,9 @@
 #include <sterm/types.h>
 #include <string.h>
 
+/* TODO remove */
+#include <stdio.h>
+
 static u32 fb_encode_color(struct sterm *term, u8 red, u8 green, u8 blue)
 {
 	u32 res = 0;
@@ -84,8 +87,11 @@ static void fb_scroll(struct sterm *term, u32 bg, int dir)
 	if (dir < 0) {
 		dir = -dir;
 
-		char *start = fb_get_pixel_addr(fb, fb->width, dir * fb->font.psf->hdr.charsize);
-		char *end = fb_get_pixel_addr(fb, fb->width, fb->height);
+		unsigned chsize = fb->font.psf->hdr.charsize;
+
+		char *start = fb_get_pixel_addr(fb, 0, dir * chsize);
+		char *end = fb_get_pixel_addr(fb, fb->width - 1, fb->height - 1);
+		fprintf(stderr, "scroll %p %p\n", (void*) start, (void*) end);
 		memmove(fb->pixels, start, end - start);
 
 		for (int off = dir; off; off--){
@@ -94,7 +100,19 @@ static void fb_scroll(struct sterm *term, u32 bg, int dir)
 			}
 		}
 	} else {
-		/* TODO */
+		unsigned chsize = fb->font.psf->hdr.charsize;
+
+		char *tmp = fb_get_pixel_addr(fb, 0, dir * chsize);
+		char *start = fb_get_pixel_addr(fb, 0, 0);
+		char *end = fb_get_pixel_addr(fb, fb->width - 1, fb->height - 1 - dir * chsize);
+		fprintf(stderr, "scroll %p %p\n", (void*) start, (void*) end);
+		memmove(tmp, start, end - start);
+
+		for (int off = 0; off < dir; off++){
+			for (u32 col = 0; col < term->width; col++) {
+				fb_clear(term, col, off, bg);
+			}
+		}
 	}
 }
 
