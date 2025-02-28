@@ -55,14 +55,10 @@ enum termcolor {
 	TERMCOLOR_BRIGHT_WHITE,
 };
 
-struct encoder_ops {
-	i64 (*put)(struct encoder *, char ch);
-};
-
 struct encoder {
 	char buf[16];
 	unsigned char offset;
-	const struct encoder_ops *ops;
+	i64 (*put)(struct encoder *, char ch);
 };
 
 struct termchar {

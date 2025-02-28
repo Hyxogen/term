@@ -666,7 +666,7 @@ static u32 term_get_color(struct term *term, enum termcolor color)
 
 static void term_put(struct term *term, unsigned char ch)
 {
-	u64 res = term->encoder.ops->put(&term->encoder, ch);
+	u64 res = term->encoder.put(&term->encoder, ch);
 	if (res < 0) {
 		return;
 	}
@@ -687,10 +687,6 @@ static i64 ascii_encode(struct encoder *encoder, char ch)
 	(void)encoder;
 	return ch;
 }
-
-static const struct encoder_ops ascii_ops = {
-	.put = ascii_encode,
-};
 
 int term_init(struct term *term, const struct termops *ops, void *ctx, int (*put)(int, void*), void *put_ctx)
 {
@@ -724,7 +720,7 @@ int term_init(struct term *term, const struct termops *ops, void *ctx, int (*put
 	term->bg_color = term->black;
 
 	/* TODO properly set encoder */
-	term->encoder.ops = &ascii_ops;
+	term->encoder.put = &ascii_encode;
 
 	term->chars = calloc(term->cols * term->rows, sizeof(*term->chars));
 	term->tabstops = calloc(term->cols, sizeof(*term->tabstops));
