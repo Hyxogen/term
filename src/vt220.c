@@ -486,9 +486,11 @@ void csi_dispatch(struct parser *ctx, uint32_t cp)
 		term_scroll(term, i);
 	case 'K': /* erase from cursor to end of line */
 		term_erase_range(term, term->col, term->row, term->cols, term->row);
+		term_draw_cursor(term);
 		break;
 	case 'J': /* erase from cursor to end of screen */
 		term_erase_range(term, term->col, term->row, 0, term->rows);
+		term_draw_cursor(term);
 		break;
 	case 'r': { /* set top and bottom margins (DECSTBM) */
 		unsigned top = term_get_param(term, 0);
