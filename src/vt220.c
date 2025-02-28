@@ -455,21 +455,19 @@ void csi_dispatch(struct parser *ctx, uint32_t cp)
 		term_exec_sgr(term);
 		break;
 	case 'M': /* delete line, (DL) */
-		/* TODO check this */
-
 		if (!term_in_scroll_region(term))
 			break;
 
 		long i = term_get_param_def(term, 0, 1);
-		unsigned rem = term->scroll_bot - term->rows;
+		unsigned rem = term->scroll_bot - term->row;
 
 		if (i > rem)
 			i = rem;
 
 		unsigned saved_top = term->scroll_top;
-		term->scroll_top = term->row + 1;
+		term->scroll_top = term->row;
 
-		term_erase_range(term, 0, term->row, term->cols, term->row + i);
+		term_erase_range(term, 0, term->row, 0, term->row + i);
 		term_scroll(term, -i);
 
 		term->scroll_top = saved_top;

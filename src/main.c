@@ -191,7 +191,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
 			"TERM=vt220",
 		};
 
-		execvpe(prog, args, env);
+		execvp(prog, args);
 		perror("execvpe");
 		return SDL_APP_FAILURE;
 	}
