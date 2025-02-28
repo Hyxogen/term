@@ -7,6 +7,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+#define DECTCEM 25 /* text cursor enable */
+
 #define eprintln(...) fprintf(stderr, __VA_ARGS__)
 
 void collect(struct parser *ctx, uint32_t cp)
@@ -48,6 +50,7 @@ void osc_start(struct parser *ctx, uint32_t cp)
 	(void)ctx;
 	(void)cp;
 	/* TODO */
+	fprintf(stderr, "tried to osc_start\n");
 }
 
 void osc_put(struct parser *ctx, uint32_t cp)
@@ -55,6 +58,7 @@ void osc_put(struct parser *ctx, uint32_t cp)
 	(void)ctx;
 	(void)cp;
 	/* TODO */
+	fprintf(stderr, "tried to osc_put\n");
 }
 
 void osc_end(struct parser *ctx, uint32_t cp)
@@ -62,26 +66,14 @@ void osc_end(struct parser *ctx, uint32_t cp)
 	(void)ctx;
 	(void)cp;
 	/* TODO */
+	fprintf(stderr, "tried to osc_end\n");
 }
 
 void put(struct parser *ctx, uint32_t cp)
 {
 	(void)ctx;
 	(void)cp;
-	/* TODO */
-}
-
-void esc_dispatch(struct parser *ctx, uint32_t cp)
-{
-	(void)ctx;
-	(void)cp;
-	/* TODO */
-}
-
-void csi_dispatch(struct parser *ctx, uint32_t cp)
-{
-	(void)ctx;
-	(void)cp;
+	fprintf(stderr, "tried to put\n");
 	/* TODO */
 }
 
@@ -90,6 +82,7 @@ void hook(struct parser *ctx, uint32_t cp)
 	(void)ctx;
 	(void)cp;
 	/* TODO */
+	fprintf(stderr, "tried to hook\n");
 }
 
 void unhook(struct parser *ctx, uint32_t cp)
@@ -97,6 +90,7 @@ void unhook(struct parser *ctx, uint32_t cp)
 	(void)ctx;
 	(void)cp;
 	/* TODO */
+	fprintf(stderr, "tried to unhook\n");
 }
 
 void clear(struct parser *ctx, uint32_t cp)
@@ -106,6 +100,9 @@ void clear(struct parser *ctx, uint32_t cp)
 
 	term->overflowed = false;
 	term->buf_off = 0;
+	term->buf[0] = '\0';
+	term->param = 0;
+	term->nparams = 0;
 }
 
 static struct termchar *term_get_at(struct term *term, unsigned cx, unsigned cy)
@@ -186,8 +183,14 @@ static void term_put_char(struct term *term, unsigned cx, unsigned cy, u32 cp, u
 	struct termchar *ch = term_get_at(term, cx, cy);
 
 	ch->cp = cp;
-	ch->fg = fg;
-	ch->bg = bg;
+
+	if (term->inverse) {
+		ch->fg = bg;
+		ch->bg = fg;
+	} else {
+		ch->fg = fg;
+		ch->bg = bg;
+	}
 	term_redraw(term, cx, cy);
 }
 
@@ -233,6 +236,164 @@ void execute(struct parser *ctx, uint32_t cp)
 		break;
 	default:
 		fprintf(stderr, "unsupported control char 0x%02x\n", cp);
+		break;
+	}
+
+	term_draw_cursor(term);
+}
+
+static unsigned short term_get_param(struct term *term, unsigned short idx)
+{
+	assert(idx < (sizeof(term->params)/sizeof(term->params[0])));
+
+	if (idx >= term->nparams)
+		return 0;
+	return term->params[idx];
+}
+
+static void dec_mode_exec(struct term *term, uint32_t cp)
+{
+	bool set;
+
+	if (cp == 'h') {
+		set = true;
+	} else if (cp == 'l') {
+		set = false;
+	} else {
+		fprintf(stderr, "unknown dec private mode suffix %c (0x%02x)\n", cp, cp);
+		return;
+	}
+
+	unsigned short param = term_get_param(term, 0);
+	switch (param) {
+	case DECTCEM:
+		term->draw_cursor = set;
+		break;
+	default:
+		fprintf(stderr, "unsupported dec mode %u\n", param);
+		break;
+	}
+}
+
+static void term_exec_sgr(struct term *term)
+{
+	for (unsigned i = 0; i < term->nparams; i++) {
+		unsigned short param = term_get_param(term, i);
+		switch (param) {
+		case 7:
+		case 27:
+			term->inverse = param == 7;
+			break;
+		default:
+			fprintf(stderr, "unsupported SGR %u\n", param);
+			break;
+		}
+	}
+}
+
+static void term_erase_char(struct term *term, unsigned cx, unsigned cy)
+{
+	term_put_char(term, cx, cy, 0, term->fg_color, term->bg_color);
+}
+
+static void term_erase_range(struct term *term, unsigned ax, unsigned ay, unsigned bx, unsigned by)
+{
+	if (ay > by) {
+		term_erase_range(term, bx, by, ax, ay);
+		return;
+	} if (ay == by && ax > bx) {
+		term_erase_range(term, bx, by, ax, ay);
+		return;
+	}
+
+	if (ay == by) {
+		for (unsigned col = ax; col < by; col++) {
+			term_erase_char(term, col, ay);
+		}
+		return;
+	}
+
+	term_erase_range(term, ax, ay, term->rows, ay);
+
+	for (unsigned row = ay+1; row < by; row++) {
+		term_erase_range(term, 0,row, term->rows, row);
+	}
+
+	term_erase_range(term, 0, by, bx, by);
+}
+
+void csi_dispatch(struct parser *ctx, uint32_t cp)
+{
+	struct term *term = ctx->priv;
+
+	if (term->param != 0)
+		term_commit_param(term);
+
+	if (term->buf[0] == '?') {
+		dec_mode_exec(term, cp);
+		return;
+	}
+
+	switch (cp) {
+	case 'm':
+		term_exec_sgr(term);
+		break;
+	case 'K':
+		term_erase_range(term, term->col, term->row, term->cols, term->row);
+		break;
+	case 'H': {
+		unsigned row = term_get_param(term, 0);
+		unsigned col = term_get_param(term, 1);
+
+		if (row >= term->rows)
+			row = term->rows;
+		if (col >= term->cols)
+			col = term->cols;
+
+		if (row)
+			row--;
+		if (col)
+			col--;
+
+		term_clear_cursor(term);
+		term->row = row;
+		term->col = col;
+		term_draw_cursor(term);
+
+		break;
+	}
+	default:
+		fprintf(stderr, "unsupported csi sequence: %c (0x%02x)\n", cp, cp);
+		fprintf(stderr, "buf: %s\n", term->buf);
+
+		if (term->nparams == 0) {
+			fprintf(stderr, "no params\n");
+		} else {
+			for (unsigned i = 0; i < term->nparams; i++)
+				fprintf(stderr, "%u ", term->params[i]);
+			fprintf(stderr, "\n");
+		}
+	}
+	(void)ctx;
+	(void)cp;
+	/* TODO */
+}
+
+void esc_dispatch(struct parser *ctx, uint32_t cp)
+{
+	struct term *term = ctx->priv;
+
+	term_clear_cursor(term);
+
+	switch (cp) {
+	case 'M': /* reverse index, RI */
+		if (term->row-- == 0) {
+			term->row = 0;
+			term_scroll(term, 1);
+		}
+		break;
+	default:
+		fprintf(stderr, "unsupported escape %c (0x%02x)\n", cp, cp);
 		break;
 	}
 
@@ -351,6 +512,9 @@ int term_init(struct term *term, const struct termops *ops, void *ctx)
 	term->ops = ops;
 
 	term->ops->get_dimensions(term, &term->cols, &term->rows);
+
+	term->scroll_top = 0;
+	term->scroll_bot = term->rows;
 
 	term->white = term_get_color(term, TERMCOLOR_WHITE);
 	term->black = term_get_color(term, TERMCOLOR_BLACK);

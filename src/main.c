@@ -2,8 +2,8 @@
 #define FONT_WIDTH 8
 #define FONT_HEIGHT 8
 
-#define COLS 137
-#define ROWS 35
+#define COLS 80
+#define ROWS 24
 #define WIDTH (FONT_WIDTH*FONT_SIZE*COLS)
 #define HEIGHT (FONT_HEIGHT*FONT_SIZE*ROWS)
 
