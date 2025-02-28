@@ -485,7 +485,7 @@ void csi_dispatch(struct parser *ctx, uint32_t cp)
 			break;
 
 		i = term_get_param_def(term, 0, 1);
-		rem = term->scroll_bot - term->rows;
+		rem = term->scroll_bot - term->row;
 
 		if (i > rem)
 			i = rem;
