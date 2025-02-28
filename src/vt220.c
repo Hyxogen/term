@@ -199,13 +199,7 @@ static void term_scroll(struct term *term, int dir)
 	char *region_end = region_start + nchars * sizeof(struct termchar);
 	char *paste_end = paste_start + nchars * sizeof(struct termchar);
 
-	fprintf(stderr, "BEFORE:\n");
-	dump(term);
-
 	memmove(paste_start, region_start, region_end - region_start);
-
-	fprintf(stderr, "AFTER:\n");
-	dump(term);
 
 	if (dir > 0) {
 		memset(region_start, 0, paste_start - region_start);
