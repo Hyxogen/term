@@ -85,13 +85,6 @@ void csi_dispatch(struct parser *ctx, uint32_t cp)
 	/* TODO */
 }
 
-void execute(struct parser *ctx, uint32_t cp)
-{
-	(void)ctx;
-	(void)cp;
-	/* TODO */
-}
-
 void hook(struct parser *ctx, uint32_t cp)
 {
 	(void)ctx;
@@ -161,7 +154,6 @@ static void term_scroll(struct term *term, int dir)
 		nlines = term->rows + dir;
 	} else {
 		/* scroll down */
-
 		region_start = (void*) &term->chars[term->cols * term->scroll_top];
 		paste_start = (void*) &term->chars[term->cols * (dir + term->scroll_top)];
 
@@ -199,6 +191,20 @@ static void term_put_char(struct term *term, unsigned cx, unsigned cy, u32 cp, u
 	term_redraw(term, cx, cy);
 }
 
+static void term_draw_cursor(struct term *term)
+{
+	if (!term->draw_cursor)
+		return;
+
+	struct termchar *ch = term_get_at(term, term->col, term->row);
+	term->ops->draw_char(term, term->col, term->row, term->black, term->white, ch->cp ? ch->cp : ' ');
+}
+
+static void term_clear_cursor(struct term *term)
+{
+	term_redraw(term, term->col, term->row);
+}
+
 static void term_linefeed(struct term *term)
 {
 	if (++term->row == term->rows) {
@@ -207,14 +213,44 @@ static void term_linefeed(struct term *term)
 	}
 }
 
+void execute(struct parser *ctx, uint32_t cp)
+{
+	struct term *term = ctx->priv;
+
+	term_clear_cursor(term);
+	switch (cp) {
+	case 0x07: /* bell, BEL */
+		break;
+	case 0x08: /* backspace, BS */
+		if (term->col-- == 0)
+			term->col = 0;
+		break;
+	case 0x0a: /* linefeed, LF */
+		term_linefeed(ctx->priv);
+		break;
+	case 0x0d: /* carriage return, CR */
+		term->col = 0;
+		break;
+	default:
+		fprintf(stderr, "unsupported control char 0x%02x\n", cp);
+		break;
+	}
+
+	term_draw_cursor(term);
+}
+
 static void term_print(struct term *term, u32 cp)
 {
+	term_clear_cursor(term);
+
 	term_put_char(term, term->col++, term->row, cp, term->fg_color, term->bg_color);
 
 	if (term->col == term->cols) {
 		term->col = 0;
 		term_linefeed(term);
 	}
+
+	term_draw_cursor(term);
 }
 
 void print(struct parser *ctx, u32 cp)
@@ -319,6 +355,7 @@ int term_init(struct term *term, const struct termops *ops, void *ctx)
 	term->white = term_get_color(term, TERMCOLOR_WHITE);
 	term->black = term_get_color(term, TERMCOLOR_BLACK);
 	term->inverse = false;
+	term->draw_cursor = true;
 
 	term->fg_color = term->white;
 	term->bg_color = term->black;

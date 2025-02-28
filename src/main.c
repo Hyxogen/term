@@ -139,11 +139,11 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
                 char *const args[] = {
                     NULL,
                 };
-                /*char *const env[] = {
+                char *const env[] = {
 			"TERM=vt220",
-		};*/
+		};
 
-		execvp(prog, args);
+		execvpe(prog, args, env);
 		perror("execvpe");
 		return SDL_APP_FAILURE;
 	}

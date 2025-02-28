@@ -124,6 +124,7 @@ struct term {
 	u32 black;
 	u32 white;
 	bool inverse;
+	bool draw_cursor;
 
 	unsigned scroll_top;
 	unsigned scroll_bot;
