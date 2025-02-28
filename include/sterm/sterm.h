@@ -8,7 +8,7 @@
 #include <sterm/parser.h>
 #include <sterm/types.h>
 
-#define TERM_DEFAULT_TABSTOP 4
+#define TERM_DEFAULT_TABSTOP 8
 
 struct term;
 struct termops;

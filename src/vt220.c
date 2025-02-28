@@ -110,6 +110,13 @@ void clear(struct parser *ctx, uint32_t cp)
 	term->nparams = 0;
 }
 
+static void term_reset_tabstops(struct term *term, unsigned tabstop)
+{
+	for (unsigned i = 0; i < term->cols; i += tabstop) {
+		term->tabstops[i] = true;
+	}
+}
+
 static struct termchar *term_get_at(struct term *term, unsigned cx, unsigned cy)
 {
 	assert(cy < term->rows && cx < term->cols);
@@ -214,19 +221,19 @@ static void term_clear_cursor(struct term *term)
 
 static void term_linefeed(struct term *term)
 {
-	if (++term->row >= term->scroll_bot) {
+	if (++term->row > term->scroll_bot) {
 		term->row -= 1;
 		term_scroll(term, -1);
 	}
 }
 
-static long term_get_next_tabstop(const struct term *term, unsigned cx, unsigned cy)
+static long term_get_next_tabstop(const struct term *term, unsigned cx)
 {
-	assert(cx < term->cols && cy < term->rows);
+	assert(cx < term->cols);
 
 	cx += 1;
 	for (; cx < term->cols; cx++) {
-		if (term->tabstops[cy * term->cols + cx])
+		if (term->tabstops[cx])
 			return cx;
 	}
 	return -1;
@@ -253,7 +260,7 @@ void execute(struct parser *ctx, uint32_t cp)
 		term->col = 0;
 		break;
 	case '\t': { /* horizontal tab, TB */
-		long i = term_get_next_tabstop(term, term->row, term->col);
+		long i = term_get_next_tabstop(term, term->col);
 		if (i < 0)
 			i = term->cols - 1;
 		term->col = (unsigned) i;
@@ -287,8 +294,7 @@ static unsigned short term_get_param_def(const struct term *term, unsigned short
 static void dec_mode_exec(struct term *term, uint32_t cp)
 {
 	bool set;
-
-	if (cp == 'h') {
+if (cp == 'h') {
 		set = true;
 	} else if (cp == 'l') {
 		set = false;
@@ -300,12 +306,16 @@ static void dec_mode_exec(struct term *term, uint32_t cp)
 	unsigned short param = term_get_param(term, 0);
 	switch (param) {
 	case DECTCEM:
+		fprintf(stderr, "DECTCEM!\n");
 		term->draw_cursor = set;
 
 		if (set)
 			term_draw_cursor(term);
 		else
 			term_clear_cursor(term);
+		break;
+	case 6:
+		assert(0);
 		break;
 	default:
 		fprintf(stderr, "unsupported dec mode %u\n", param);
@@ -528,10 +538,10 @@ void csi_dispatch(struct parser *ctx, uint32_t cp)
 	case 'g': /* tabulation clear, TBC */
 		switch (term_get_param(term, 0)) {
 		case 0:
-			term->tabstops[term->row * term->cols + term->col] = false;
+			term->tabstops[term->col] = false;
 			break;
 		case 3:
-			memset(term->tabstops, 0, term->rows * term->cols * sizeof(*term->tabstops));
+			term_reset_tabstops(term, TERM_DEFAULT_TABSTOP);
 			break;
 		default:
 			fprintf(stderr, "unsupported TBC parameter\n");
@@ -566,7 +576,7 @@ void esc_dispatch(struct parser *ctx, uint32_t cp)
 		}
 		break;
 	case 'H': /* horizontal tab set, HTS */
-		term->tabstops[term->row * term->cols + term->col] = true;
+		term->tabstops[term->col] = true;
 		break;
 	default:
 		fprintf(stderr, "unsupported escape %c (0x%02x)\n", cp, cp);
@@ -704,12 +714,14 @@ int term_init(struct term *term, const struct termops *ops, void *ctx)
 	term->encoder.ops = &ascii_ops;
 
 	term->chars = calloc(term->cols * term->rows, sizeof(*term->chars));
-	term->tabstops = calloc(term->cols * term->rows, sizeof(*term->tabstops));
+	term->tabstops = calloc(term->cols, sizeof(*term->tabstops));
 	if (!term->chars || !term->tabstops) {
 		free(term->chars);
 		free(term->tabstops);
 		return -1;
 	}
+
+	term_reset_tabstops(term, TERM_DEFAULT_TABSTOP);
 
 	return 0;
 }
