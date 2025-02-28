@@ -8,6 +8,8 @@
 #include <sterm/parser.h>
 #include <sterm/types.h>
 
+#define TERM_DEFAULT_TABSTOP 4
+
 struct term;
 struct termops;
 struct encoder;
@@ -117,8 +119,6 @@ struct term {
 	unsigned rows;
 	unsigned cols;
 
-	unsigned tabstop;
-
 	struct encoder encoder;
 
 	u32 fg_color;
@@ -142,6 +142,7 @@ struct term {
 	struct parser parser;
 
 	struct termchar *chars;
+	bool *tabstops;
 	const struct termops *ops;
 
 	int fd;

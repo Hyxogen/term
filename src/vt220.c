@@ -220,6 +220,18 @@ static void term_linefeed(struct term *term)
 	}
 }
 
+static long term_get_next_tabstop(const struct term *term, unsigned cx, unsigned cy)
+{
+	assert(cx < term->cols && cy < term->rows);
+
+	cx += 1;
+	for (; cx < term->cols; cx++) {
+		if (term->tabstops[cy * term->cols + cx])
+			return cx;
+	}
+	return -1;
+}
+
 void execute(struct parser *ctx, uint32_t cp)
 {
 	struct term *term = ctx->priv;
@@ -240,7 +252,13 @@ void execute(struct parser *ctx, uint32_t cp)
 	case 0x0d: /* carriage return, CR */
 		term->col = 0;
 		break;
-	/* TODO tabs */
+	case '\t': { /* horizontal tab, TB */
+		long i = term_get_next_tabstop(term, term->row, term->col);
+		if (i < 0)
+			i = term->cols - 1;
+		term->col = (unsigned) i;
+		break;
+	}
 	default:
 		fprintf(stderr, "unsupported control char 0x%02x\n", cp);
 		break;
@@ -297,16 +315,27 @@ static void dec_mode_exec(struct term *term, uint32_t cp)
 
 static void term_exec_sgr(struct term *term)
 {
+	if (term->nparams == 0) {
+		/* HACK: an empty sgr just implies that the first param is 0 */
+		term->param = 0;
+		term_commit_param(term);
+	}
+
 	for (unsigned i = 0; i < term->nparams; i++) {
 		unsigned short param = term_get_param(term, i);
 		switch (param) {
+		case 0:
+			term->fg_color = term->white;
+			term->bg_color = term->black;
+			term->inverse = false;
+			break;
 		case 7:
 		case 27:
 			term->inverse = param == 7;
 			break;
 		default:
 			fprintf(stderr, "unsupported SGR %u\n", param);
-			break;
+			return;
 		}
 	}
 }
@@ -365,9 +394,25 @@ static bool term_in_scroll_region(const struct term *term)
 	return term->row >= term->scroll_top && term->row <= term->scroll_bot;
 }
 
+static void term_dump_csi(const struct term *term, u32 cp)
+{
+	fprintf(stderr, "CSI %c (0x%02x)\n", cp, cp);
+	fprintf(stderr, "buf:    \"%s\"\n", term->buf);
+	fprintf(stderr, "params: ");
+	if (term->nparams == 0) {
+		fprintf(stderr, "no params\n");
+	} else {
+		for (unsigned i = 0; i < term->nparams; i++)
+			fprintf(stderr, "%u ", term->params[i]);
+		fprintf(stderr, "\n");
+	}
+}
+
 void csi_dispatch(struct parser *ctx, uint32_t cp)
 {
 	struct term *term = ctx->priv;
+
+	term_dump_csi(term, cp);
 
 	if (term->param != 0)
 		term_commit_param(term);
@@ -480,6 +525,19 @@ void csi_dispatch(struct parser *ctx, uint32_t cp)
 			break;
 		}
 		break;
+	case 'g': /* tabulation clear, TBC */
+		switch (term_get_param(term, 0)) {
+		case 0:
+			term->tabstops[term->row * term->cols + term->col] = false;
+			break;
+		case 3:
+			memset(term->tabstops, 0, term->rows * term->cols * sizeof(*term->tabstops));
+			break;
+		default:
+			fprintf(stderr, "unsupported TBC parameter\n");
+			break;
+		}
+		break;
 	default:
 		fprintf(stderr, "unsupported csi sequence: %c (0x%02x)\n", cp, cp);
 		fprintf(stderr, "buf: \"%s\"\n", term->buf);
@@ -506,6 +564,9 @@ void esc_dispatch(struct parser *ctx, uint32_t cp)
 			term->row = 0;
 			term_scroll(term, 1);
 		}
+		break;
+	case 'H': /* horizontal tab set, HTS */
+		term->tabstops[term->row * term->cols + term->col] = true;
 		break;
 	default:
 		fprintf(stderr, "unsupported escape %c (0x%02x)\n", cp, cp);
@@ -614,8 +675,6 @@ int term_init(struct term *term, const struct termops *ops, void *ctx)
 	term->row = 0;
 	term->col = 0;
 
-	term->tabstop = 4;
-
 	term->priv = ctx;
 
 	term->buf_off = 0;
@@ -645,8 +704,13 @@ int term_init(struct term *term, const struct termops *ops, void *ctx)
 	term->encoder.ops = &ascii_ops;
 
 	term->chars = calloc(term->cols * term->rows, sizeof(*term->chars));
-	if (!term->chars)
+	term->tabstops = calloc(term->cols * term->rows, sizeof(*term->tabstops));
+	if (!term->chars || !term->tabstops) {
+		free(term->chars);
+		free(term->tabstops);
 		return -1;
+	}
+
 	return 0;
 }
 

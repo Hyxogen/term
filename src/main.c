@@ -62,6 +62,8 @@ static char uppercase(char ch)
 		return ':';
 	case '1':
 		return '!';
+	case '/':
+		return '?';
 	default:
 		return toupper(ch);
 	}
